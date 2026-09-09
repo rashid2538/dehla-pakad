@@ -49,7 +49,7 @@ class BotController {
 
       await _gameService.playCard(gameId, player.uid, seat, cardId);
     } catch (_) {
-      // Transaction validation prevents invalid plays
+      // Retried on next _maybeAct cycle
     } finally {
       _processing = false;
       if (!_disposed) _maybeAct();
