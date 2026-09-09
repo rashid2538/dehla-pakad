@@ -1,10 +1,8 @@
-name: Deploy Landing Page
+name: Deploy Landing Page + PWA
 
 on:
   push:
     branches: [master]
-    paths:
-      - 'site/**'
   workflow_dispatch:
 
 jobs:
@@ -12,6 +10,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Restore Firebase config
+        run: echo "${{ secrets.FIREBASE_OPTIONS_DART }}" | base64 -d > lib/firebase_options.dart
+
+      - name: Build Flutter web
+        run: |
+          flutter pub get
+          flutter build web --release
+          cp -r build/web site/public/pwa
 
       - name: Deploy to Firebase Hosting
         run: npx firebase-tools deploy --only hosting --project dehla-pakad-game

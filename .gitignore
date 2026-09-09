@@ -51,3 +51,6 @@ lib/firebase_options.dart
 
 # Widget Preview related
 .widget_preview/
+
+# Built PWA (generated from Flutter web build)
+site/public/pwa/
