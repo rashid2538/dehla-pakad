@@ -454,12 +454,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                   ),
           ),
           const Spacer(),
-          Text(
-            'Trick ${game.trickNumber}/13',
-            style: const TextStyle(color: AppColors.silver, fontSize: 12),
-          ),
-          const SizedBox(width: 8),
-          _buildTensIndicator(game),
+          _buildTeamScore(game),
           const SizedBox(width: 4),
           GestureDetector(
             onTap: () async {
@@ -541,30 +536,37 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     );
   }
 
-  Widget _buildTensIndicator(GameState game) {
+  Widget _buildTeamScore(GameState game) {
+    final tricksA = game.trickPileA.trickCount;
+    final tricksB = game.trickPileB.trickCount;
+    final tensA = game.collectedTens.tensForTeam('teamA');
+    final tensB = game.collectedTens.tensForTeam('teamB');
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (final suit in Suit.values)
-          Padding(
-            padding: const EdgeInsets.only(left: 2),
-            child: () {
-              final tenId = '10${suit.letter}';
-              final team = game.collectedTens.tens[tenId];
-              return Text(
-                suit.symbol,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: team == 'teamA'
-                      ? AppColors.teamA
-                      : team == 'teamB'
-                      ? AppColors.teamB
-                      : AppColors.silver.withValues(alpha: 0.3),
-                ),
-              );
-            }(),
-          ),
+        Text(
+          'T${game.trickNumber}/13',
+          style: const TextStyle(color: AppColors.silver, fontSize: 11),
+        ),
+        const SizedBox(width: 8),
+        _scoreChip('A', tricksA, tensA, AppColors.teamA),
+        const SizedBox(width: 4),
+        _scoreChip('B', tricksB, tensB, AppColors.teamB),
       ],
+    );
+  }
+
+  Widget _scoreChip(String label, int tricks, int tens, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '$label: $tricks✦ $tens⑩',
+        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+      ),
     );
   }
 
@@ -808,27 +810,63 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
               ]
             : null,
       ),
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            for (var i = 0; i < sorted.length; i++)
-              Padding(
-                key: ValueKey(sorted[i].id),
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: PlayingCardWidget(
-                  card: sorted[i],
-                  width: 52,
-                  enabled: isMyTurn && legalCards.contains(sorted[i].id),
-                  highlighted: isMyTurn && legalCards.contains(sorted[i].id),
-                  onTap: () => _playCard(mySeat, sorted[i].id),
-                ),
-              ),
-          ],
-        ),
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final n = sorted.length;
+          if (n == 0) return const SizedBox.shrink();
+          final availW = constraints.maxWidth;
+          // Cards overlap: visible fraction ~35% per stacked card
+          const visibleFrac = 0.35;
+          final cardW = (availW / (1 + (n - 1) * visibleFrac)).clamp(50.0, 100.0);
+          final cardH = cardW * 1.4;
+          final step = n > 1
+              ? ((availW - cardW) / (n - 1)).clamp(0.0, cardW * 0.65)
+              : 0.0;
+          final totalW = cardW + step * (n - 1);
+          final startX = (availW - totalW) / 2;
+
+          return SizedBox(
+            height: cardH + 16, // extra space for lifted cards
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (var i = 0; i < n; i++)
+                  Positioned(
+                    left: startX + step * i,
+                    bottom: 0,
+                    child: _buildHandCard(
+                      sorted[i],
+                      cardW,
+                      isLegal: isMyTurn && legalCards.contains(sorted[i].id),
+                      isMyTurn: isMyTurn,
+                      onTap: () => _playCard(mySeat, sorted[i].id),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHandCard(
+    PlayingCard card,
+    double width, {
+    required bool isLegal,
+    required bool isMyTurn,
+    required VoidCallback onTap,
+  }) {
+    return Transform.translate(
+      offset: Offset(0, isLegal ? -12 : 0),
+      child: PlayingCardWidget(
+        key: ValueKey(card.id),
+        card: card,
+        width: width,
+        enabled: isLegal,
+        highlighted: isLegal,
+        onTap: onTap,
       ),
     );
   }
