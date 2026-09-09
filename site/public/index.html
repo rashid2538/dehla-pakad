@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dehla Pakad — Grab All the Tens!</title>
+  <meta name="description" content="Dehla Pakad is a real-time multiplayer Indian trick-taking card game. Play with friends or bots. Collect all four Tens to win!">
+  <meta name="theme-color" content="#5C1A2A">
+  <meta property="og:title" content="Dehla Pakad — Grab All the Tens!">
+  <meta property="og:description" content="Real-time multiplayer Indian trick-taking card game. Play with friends or bots!">
+  <meta property="og:image" content="assets/hero.png">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --maroon: #5C1A2A;
+      --maroon-deep: #2A0A14;
+      --burgundy: #7B2D3F;
+      --gold: #D4AF37;
+      --gold-light: #F0D77B;
+      --ivory: #F5F0E8;
+      --silver: #C0B8A8;
+      --bg-card: rgba(92, 26, 42, 0.6);
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: linear-gradient(135deg, var(--maroon-deep) 0%, var(--maroon) 50%, #3D1020 100%);
+      color: var(--ivory);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    h1, h2, h3 { font-family: 'Cinzel', serif; }
+
+    a { color: var(--gold); text-decoration: none; }
+    a:hover { color: var(--gold-light); }
+
+    /* Decorative background */
+    .bg-pattern {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.04;
+      background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 5 L35 25 L55 30 L35 35 L30 55 L25 35 L5 30 L25 25 Z' fill='%23D4AF37'/%3E%3C/svg%3E");
+      background-size: 80px 80px;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+    /* Nav */
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 0; border-bottom: 1px solid rgba(212, 175, 55, 0.15);
+    }
+    .logo { font-family: 'Cinzel', serif; font-size: 1.4rem; font-weight: 700; color: var(--gold); }
+    .logo span { color: var(--ivory); font-weight: 600; }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a { color: var(--silver); font-size: 0.9rem; transition: color 0.2s; }
+    .nav-links a:hover { color: var(--gold); }
+
+    /* Hero */
+    .hero {
+      text-align: center; padding: 80px 0 60px;
+    }
+    .hero-badge {
+      display: inline-block; padding: 6px 16px; border-radius: 20px;
+      background: rgba(212, 175, 55, 0.12); border: 1px solid rgba(212, 175, 55, 0.25);
+      font-size: 0.85rem; color: var(--gold); margin-bottom: 24px;
+    }
+    .hero h1 {
+      font-size: clamp(2.4rem, 6vw, 4rem); font-weight: 900; line-height: 1.1;
+      background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 50%, var(--gold) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text; margin-bottom: 16px;
+    }
+    .hero p {
+      font-size: 1.15rem; color: var(--silver); max-width: 560px; margin: 0 auto 36px; line-height: 1.6;
+    }
+    .hero-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px; padding: 14px 28px;
+      border-radius: 10px; font-weight: 600; font-size: 1rem; transition: all 0.2s;
+      cursor: pointer; border: none; font-family: inherit;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--gold), #C5A028);
+      color: var(--maroon-deep); box-shadow: 0 4px 20px rgba(212, 175, 55, 0.3);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 28px rgba(212, 175, 55, 0.45); }
+    .btn-secondary {
+      background: transparent; color: var(--gold);
+      border: 2px solid rgba(212, 175, 55, 0.4);
+    }
+    .btn-secondary:hover { border-color: var(--gold); background: rgba(212, 175, 55, 0.08); }
+    .btn svg { width: 20px; height: 20px; }
+
+    .hero-image {
+      margin: 48px auto 0; max-width: 680px;
+      border-radius: 16px; overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(212, 175, 55, 0.1);
+      border: 1px solid rgba(212, 175, 55, 0.15);
+    }
+    .hero-image img { width: 100%; display: block; }
+
+    /* Features */
+    .features { padding: 80px 0; }
+    .features h2 {
+      text-align: center; font-size: 2rem; color: var(--gold); margin-bottom: 48px;
+    }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+    }
+    .feature-card {
+      background: var(--bg-card); border: 1px solid rgba(212, 175, 55, 0.1);
+      border-radius: 16px; padding: 28px; transition: transform 0.2s, border-color 0.2s;
+    }
+    .feature-card:hover { transform: translateY(-4px); border-color: rgba(212, 175, 55, 0.3); }
+    .feature-card img {
+      width: 100%; height: 200px; object-fit: cover; border-radius: 10px; margin-bottom: 20px;
+    }
+    .feature-card h3 { font-size: 1.15rem; color: var(--gold-light); margin-bottom: 8px; }
+    .feature-card p { color: var(--silver); font-size: 0.95rem; line-height: 1.6; }
+
+    /* How to play */
+    .how-to-play { padding: 80px 0; }
+    .how-to-play h2 { text-align: center; font-size: 2rem; color: var(--gold); margin-bottom: 48px; }
+    .steps {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 24px; counter-reset: step;
+    }
+    .step {
+      text-align: center; padding: 24px; counter-increment: step;
+    }
+    .step::before {
+      content: counter(step);
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--gold), #C5A028);
+      color: var(--maroon-deep); font-family: 'Cinzel', serif;
+      font-weight: 700; font-size: 1.3rem; margin-bottom: 16px;
+    }
+    .step h3 { color: var(--ivory); font-size: 1.05rem; margin-bottom: 8px; }
+    .step p { color: var(--silver); font-size: 0.9rem; line-height: 1.5; }
+
+    /* Rules */
+    .rules { padding: 60px 0; }
+    .rules-card {
+      background: var(--bg-card); border: 1px solid rgba(212, 175, 55, 0.12);
+      border-radius: 16px; padding: 36px; max-width: 700px; margin: 0 auto;
+    }
+    .rules-card h2 { font-size: 1.6rem; color: var(--gold); margin-bottom: 20px; text-align: center; }
+    .rules-card ul { list-style: none; }
+    .rules-card li {
+      padding: 10px 0; border-bottom: 1px solid rgba(212, 175, 55, 0.08);
+      color: var(--silver); font-size: 0.95rem; line-height: 1.5;
+      display: flex; gap: 10px;
+    }
+    .rules-card li:last-child { border-bottom: none; }
+    .rules-card li::before { content: '♠'; color: var(--gold); flex-shrink: 0; }
+
+    /* Download / CTA */
+    .cta { padding: 80px 0; text-align: center; }
+    .cta h2 { font-size: 2rem; color: var(--gold); margin-bottom: 12px; }
+    .cta p { color: var(--silver); margin-bottom: 32px; font-size: 1.05rem; }
+    .cta-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+    #apk-version { font-size: 0.8rem; color: var(--silver); margin-top: 12px; }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid rgba(212, 175, 55, 0.1);
+      padding: 32px 0; text-align: center;
+      color: var(--silver); font-size: 0.85rem;
+    }
+    footer a { color: var(--gold); }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .hero { padding: 48px 0 40px; }
+      .hero-buttons { flex-direction: column; align-items: center; }
+      .btn { width: 100%; max-width: 280px; justify-content: center; }
+      .nav-links { gap: 14px; }
+      .features-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-pattern"></div>
+
+  <div class="container">
+    <nav>
+      <div class="logo">Dehla <span>Pakad</span></div>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-to-play">How to Play</a>
+        <a href="https://github.com/rashid2538/dehla-pakad" target="_blank">GitHub</a>
+      </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-badge">🃏 Open Source Card Game</div>
+      <h1>Dehla Pakad</h1>
+      <p>The classic Indian trick-taking card game — now multiplayer and online. Grab all the Tens to claim your victory!</p>
+      <div class="hero-buttons">
+        <a href="https://dehla-pakad-game.web.app/pwa/" class="btn btn-primary" id="pwa-btn">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>
+          Play Online (PWA)
+        </a>
+        <a href="#" class="btn btn-secondary" id="apk-btn" onclick="return false;">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.34v4h6.66V9h3.34L12 2z"/></svg>
+          <span id="apk-text">Download APK</span>
+        </a>
+      </div>
+      <div class="hero-image">
+        <img src="assets/hero.png" alt="Dehla Pakad — Royal Indian card game" width="768" height="448" loading="eager">
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features" id="features">
+      <h2>Game Features</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <img src="assets/multiplayer.png" alt="Multiplayer gameplay" width="384" height="384" loading="lazy">
+          <h3>Real-Time Multiplayer</h3>
+          <p>Play with friends anywhere using room codes. Firestore real-time sync ensures instant card plays and trick resolution across all devices.</p>
+        </div>
+        <div class="feature-card">
+          <img src="assets/bot.png" alt="AI Bot players" width="384" height="384" loading="lazy">
+          <h3>Smart Bot Players</h3>
+          <p>Can't find four humans? Add AI bots with medium-difficulty strategy — they protect Tens, manage trump, and play as a team.</p>
+        </div>
+        <div class="feature-card">
+          <img src="assets/victory.png" alt="Victory celebration" width="384" height="384" loading="lazy">
+          <h3>Court & Poopy Victories</h3>
+          <p>Win by collecting all four Tens or holding the majority. Earn the prestigious Court Victory or the dreaded Poopy Victory!</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- How to Play -->
+    <section class="how-to-play" id="how-to-play">
+      <h2>How to Play</h2>
+      <div class="steps">
+        <div class="step">
+          <h3>Create a Room</h3>
+          <p>Sign in with Google, create a room, and share the 6-letter code with your friends.</p>
+        </div>
+        <div class="step">
+          <h3>Fill the Table</h3>
+          <p>Wait for 4 players to join, or add bots to fill empty seats. Partners sit across from each other.</p>
+        </div>
+        <div class="step">
+          <h3>Play Cards</h3>
+          <p>Follow suit, set trump when void, and strategize with your partner to capture those precious Tens.</p>
+        </div>
+        <div class="step">
+          <h3>Grab the Tens!</h3>
+          <p>Collect all four Tens for an instant win, or hold the majority after 13 tricks.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Rules -->
+    <section class="rules">
+      <div class="rules-card">
+        <h2>Quick Rules</h2>
+        <ul>
+          <li>4 players in 2 teams — partners sit opposite (seats 1 &amp; 3 vs 2 &amp; 4)</li>
+          <li>Standard 52-card deck, all cards dealt (13 each)</li>
+          <li>Must follow the led suit — play any card if void in that suit</li>
+          <li>First void play sets trump for the rest of the game</li>
+          <li>Highest card of led suit wins the trick (unless trumped)</li>
+          <li>All 4 Tens to one team = immediate victory</li>
+          <li>After 13 tricks: more Tens wins; if tied 2-2, more tricks wins</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+      <h2>Ready to Play?</h2>
+      <p>Jump into a game right now — no download needed with the PWA, or grab the Android APK.</p>
+      <div class="cta-buttons">
+        <a href="https://dehla-pakad-game.web.app/pwa/" class="btn btn-primary">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          Play Online
+        </a>
+        <a href="#" class="btn btn-secondary" id="apk-btn-2" onclick="return false;">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.34v4h6.66V9h3.34L12 2z"/></svg>
+          <span id="apk-text-2">Download APK</span>
+        </a>
+      </div>
+      <div id="apk-version"></div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>
+        Dehla Pakad &copy; 2026 <a href="https://github.com/rashid2538" target="_blank">Rashid Mohamad</a>.
+        Open source under <a href="https://github.com/rashid2538/dehla-pakad/blob/master/LICENSE" target="_blank">MIT License</a>.
+      </p>
+    </footer>
+  </div>
+
+  <script>
+    (async function loadRelease() {
+      try {
+        const res = await fetch('https://api.github.com/repos/rashid2538/dehla-pakad/releases/latest');
+        if (!res.ok) return;
+        const data = await res.json();
+        const apk = data.assets && data.assets.find(a => a.name.endsWith('.apk'));
+        if (!apk) return;
+
+        const url = apk.browser_download_url;
+        const version = data.tag_name;
+
+        document.querySelectorAll('#apk-btn, #apk-btn-2').forEach(el => {
+          el.href = url;
+          el.onclick = null;
+        });
+        document.querySelectorAll('#apk-text, #apk-text-2').forEach(el => {
+          el.textContent = 'Download APK';
+        });
+        document.getElementById('apk-version').textContent = 'Latest: ' + version + ' • ' + (apk.size / 1048576).toFixed(1) + ' MB';
+      } catch (e) {
+        // No release yet — buttons stay inactive
+      }
+    })();
+  </script>
+</body>
+</html>
