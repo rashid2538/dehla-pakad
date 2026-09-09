@@ -14,10 +14,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy to Firebase Hosting
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          channelId: live
-          projectId: dehla-pakad-game
-          entryPoint: .
+        run: npx firebase-tools deploy --only hosting --project dehla-pakad-game
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
