@@ -37,6 +37,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   bool _showTenCollected = false;
   String? _collectedTenId;
   String? _collectedTenTeam;
+  List<TrickPlay>? _previousTrickPlays;
 
   @override
   void initState() {
@@ -129,8 +130,9 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       });
     }
 
-    // Trick completed
+    // Trick completed — keep previous plays visible until new trick starts
     if (game.trickNumber > prev.trickNumber && prev.trickNumber > 0) {
+      _previousTrickPlays = prev.currentTrick?.plays;
       final winnerTeam = GameState.teamForSeat(game.currentTurnSeat!);
       _trickWinnerSeat = game.currentTurnSeat;
       if (winnerTeam == myTeam) {
@@ -143,6 +145,12 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       Future.delayed(const Duration(milliseconds: 800), () {
         if (mounted) setState(() => _showTrickWin = false);
       });
+    }
+
+    // Clear previous trick cards when new trick's first card is played
+    if (_previousTrickPlays != null &&
+        (game.currentTrick?.plays.isNotEmpty == true)) {
+      _previousTrickPlays = null;
     }
 
     // Ten collected
@@ -539,33 +547,64 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   Widget _buildTeamScore(GameState game) {
     final tricksA = game.trickPileA.trickCount;
     final tricksB = game.trickPileB.trickCount;
-    final tensA = game.collectedTens.tensForTeam('teamA');
-    final tensB = game.collectedTens.tensForTeam('teamB');
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           'T${game.trickNumber}/13',
-          style: const TextStyle(color: AppColors.silver, fontSize: 11),
+          style: const TextStyle(color: AppColors.silver, fontSize: 13),
         ),
         const SizedBox(width: 8),
-        _scoreChip('A', tricksA, tensA, AppColors.teamA),
+        _scoreChip('A', tricksA, game.collectedTens, 'teamA', AppColors.teamA),
         const SizedBox(width: 4),
-        _scoreChip('B', tricksB, tensB, AppColors.teamB),
+        _scoreChip('B', tricksB, game.collectedTens, 'teamB', AppColors.teamB),
       ],
     );
   }
 
-  Widget _scoreChip(String label, int tricks, int tens, Color color) {
+  Widget _scoreChip(
+    String label,
+    int tricks,
+    CollectedTens collected,
+    String team,
+    Color color,
+  ) {
+    final capturedTens = collected.tens.entries
+        .where((e) => e.value == team)
+        .map((e) {
+      final suit = Suit.fromLetter(e.key.substring(2));
+      return suit;
+    }).toList();
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         border: Border.all(color: color.withValues(alpha: 0.5)),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(
-        '$label: $tricks✦ $tens⑩',
-        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label: $tricks',
+            style: TextStyle(
+              color: color,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          for (final suit in capturedTens)
+            Text(
+              suit.symbol,
+              style: TextStyle(
+                color: (suit == Suit.hearts || suit == Suit.diamonds)
+                    ? AppColors.suitRed
+                    : AppColors.ivory,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -730,7 +769,9 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     final trick = game.currentTrick;
     if (trick == null) return const SizedBox.shrink();
 
-    final plays = trick.plays;
+    final plays = trick.plays.isEmpty && _previousTrickPlays != null
+        ? _previousTrickPlays!
+        : trick.plays;
     final positions = <int, Offset>{
       mySeat: Offset(0, cardW * 0.8),
       _relativeSeat(mySeat, 1): Offset(cardW * 0.9, 0),

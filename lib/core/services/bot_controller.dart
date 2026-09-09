@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/game_state.dart';
 import 'bot_engine.dart';
 import 'game_service.dart';
@@ -48,8 +50,9 @@ class BotController {
       );
 
       await _gameService.playCard(gameId, player.uid, seat, cardId);
-    } catch (_) {
-      // Retried on next _maybeAct cycle
+    } catch (e, st) {
+      debugPrint('BotController ERROR: $e');
+      debugPrint('Stack: $st');
     } finally {
       _processing = false;
       if (!_disposed) _maybeAct();

@@ -18,10 +18,10 @@ String chooseBotCard({
   final botTeam = GameState.teamForSeat(botSeat);
   final trumpSuit = gameState.trumpSuit;
 
-  if (isLeading) {
+  if (isLeading || leadSuit == null) {
     return _chooseLead(legal, trumpSuit).id;
   }
-  return _chooseFollow(legal, trick, leadSuit!, trumpSuit, botTeam).id;
+  return _chooseFollow(legal, trick, leadSuit, trumpSuit, botTeam).id;
 }
 
 PlayingCard _chooseLead(List<PlayingCard> legal, Suit? trumpSuit) {

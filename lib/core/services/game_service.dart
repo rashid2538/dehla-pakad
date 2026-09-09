@@ -320,6 +320,7 @@ class GameService {
       }
       if (game.currentTurnSeat != seat) throw Exception('Not your turn');
       if (!hand.contains(cardId)) throw Exception('Card not in hand');
+      if (game.currentTrick == null) throw Exception('No active trick');
 
       final card = PlayingCard.fromId(cardId);
       final trick = game.currentTrick!;
