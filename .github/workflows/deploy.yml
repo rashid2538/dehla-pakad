@@ -21,7 +21,7 @@ jobs:
       - name: Build Flutter web
         run: |
           flutter pub get
-          flutter build web --release
+          flutter build web --release --base-href=/pwa/
           cp -r build/web site/public/pwa
 
       - name: Deploy to Firebase Hosting
