@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1082563740608",
+    "project_id": "dehla-pakad-game",
+    "storage_bucket": "dehla-pakad-game.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1082563740608:android:a4b935c67674ff702b3e25",
+        "android_client_info": {
+          "package_name": "com.himachalminds.dehlapakad"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBlEkLsecH8i-EodmZwn6V3Atpvm0pc5Lg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

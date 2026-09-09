@@ -1,0 +1,26 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "dehla-pakad-game",
+          "appId": "1:1082563740608:android:a4b935c67674ff702b3e25",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "dehla-pakad-game",
+          "configurations": {
+            "android": "1:1082563740608:android:a4b935c67674ff702b3e25",
+            "web": "1:1082563740608:web:01bc90f717e0011a2b3e25"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}
