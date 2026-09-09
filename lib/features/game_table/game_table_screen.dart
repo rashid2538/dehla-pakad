@@ -57,12 +57,12 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    onVisibilityChanged(state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.paused);
+    onVisibilityChanged(
+      state == AppLifecycleState.hidden || state == AppLifecycleState.paused,
+    );
   }
 
-  int _relativeSeat(int mySeat, int offset) =>
-      ((mySeat - 1 + offset) % 4) + 1;
+  int _relativeSeat(int mySeat, int offset) => ((mySeat - 1 + offset) % 4) + 1;
 
   Future<void> _playCard(int mySeat, String cardId) async {
     if (_playing) return;
@@ -223,8 +223,10 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
 
               if (mySeat == null) {
                 return const Center(
-                  child: Text('Not in this game',
-                      style: TextStyle(color: AppColors.ivory)),
+                  child: Text(
+                    'Not in this game',
+                    style: TextStyle(color: AppColors.ivory),
+                  ),
                 );
               }
 
@@ -235,14 +237,11 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 builder: (context, handSnap) {
                   final handIds = handSnap.data ?? [];
                   final hand = handIds.map(PlayingCard.fromId).toList();
-                  final leadSuit =
-                      game.currentTrick?.plays.isEmpty == true
-                          ? null
-                          : game.leadSuit;
+                  final leadSuit = game.currentTrick?.plays.isEmpty == true
+                      ? null
+                      : game.leadSuit;
                   final legalCards = isMyTurn
-                      ? getLegalCards(hand, leadSuit)
-                          .map((c) => c.id)
-                          .toSet()
+                      ? getLegalCards(hand, leadSuit).map((c) => c.id).toSet()
                       : <String>{};
 
                   return SafeArea(
@@ -252,14 +251,18 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                           children: [
                             _buildTopBar(game),
                             Expanded(
-                              child: _buildTable(game, mySeat, hand, legalCards),
+                              child: _buildTable(
+                                game,
+                                mySeat,
+                                hand,
+                                legalCards,
+                              ),
                             ),
                             _buildHand(hand, legalCards, mySeat, isMyTurn),
                           ],
                         ),
                         if (_showTrumpBanner) _buildTrumpBanner(game),
-                        if (_showTrickWin)
-                          _buildTrickWinOverlay(game, mySeat),
+                        if (_showTrickWin) _buildTrickWinOverlay(game, mySeat),
                         if (_showTenCollected) _buildTenCollectedOverlay(),
                       ],
                     ),
@@ -281,36 +284,43 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       left: 0,
       right: 0,
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          decoration: BoxDecoration(
-            color: AppColors.maroonDark.withValues(alpha: 0.95),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.gold, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.gold.withValues(alpha: 0.3),
-                blurRadius: 20,
-                spreadRadius: 4,
-              ),
-            ],
-          ),
-          child: Text(
-            '${suit.symbol} Trump is ${suit.name}!',
-            style: TextStyle(
-              color: (suit == Suit.hearts || suit == Suit.diamonds)
-                  ? AppColors.suitRed
-                  : AppColors.ivory,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        )
-            .animate()
-            .fadeIn(duration: 200.ms)
-            .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1))
-            .then()
-            .shimmer(duration: 600.ms, color: AppColors.gold.withValues(alpha: 0.3)),
+        child:
+            Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.maroonDark.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.gold, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.gold.withValues(alpha: 0.3),
+                        blurRadius: 20,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '${suit.symbol} Trump is ${suit.name}!',
+                    style: TextStyle(
+                      color: (suit == Suit.hearts || suit == Suit.diamonds)
+                          ? AppColors.suitRed
+                          : AppColors.ivory,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+                .animate()
+                .fadeIn(duration: 200.ms)
+                .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1))
+                .then()
+                .shimmer(
+                  duration: 600.ms,
+                  color: AppColors.gold.withValues(alpha: 0.3),
+                ),
       ),
     );
   }
@@ -358,29 +368,33 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       left: 0,
       right: 0,
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.maroonDark.withValues(alpha: 0.9),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isTeamA ? AppColors.teamA : AppColors.teamB,
-            ),
-          ),
-          child: Text(
-            '10${suit.symbol} collected by ${isTeamA ? "Team A" : "Team B"}!',
-            style: TextStyle(
-              color: isTeamA ? AppColors.teamA : AppColors.teamB,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        )
-            .animate()
-            .fadeIn(duration: 200.ms)
-            .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1))
-            .then()
-            .fadeOut(delay: 800.ms),
+        child:
+            Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.maroonDark.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isTeamA ? AppColors.teamA : AppColors.teamB,
+                    ),
+                  ),
+                  child: Text(
+                    '10${suit.symbol} collected by ${isTeamA ? "Team A" : "Team B"}!',
+                    style: TextStyle(
+                      color: isTeamA ? AppColors.teamA : AppColors.teamB,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+                .animate()
+                .fadeIn(duration: 200.ms)
+                .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1))
+                .then()
+                .fadeOut(delay: 800.ms),
       ),
     );
   }
@@ -425,7 +439,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 ? Text(
                     'Trump ${game.trumpSuit!.symbol}',
                     style: TextStyle(
-                      color: (game.trumpSuit == Suit.hearts ||
+                      color:
+                          (game.trumpSuit == Suit.hearts ||
                               game.trumpSuit == Suit.diamonds)
                           ? AppColors.suitRed
                           : AppColors.ivory,
@@ -453,9 +468,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
             },
             onLongPress: () => _showVolumeDialog(),
             child: Icon(
-              AudioService.instance.muted
-                  ? Icons.volume_off
-                  : Icons.volume_up,
+              AudioService.instance.muted ? Icons.volume_off : Icons.volume_up,
               color: AppColors.gold,
               size: 20,
             ),
@@ -478,15 +491,21 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Sound Settings',
-                  style: TextStyle(
-                      color: AppColors.gold,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold)),
+              const Text(
+                'Sound Settings',
+                style: TextStyle(
+                  color: AppColors.gold,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(height: 16),
               Row(
                 children: [
-                  const Text('Volume', style: TextStyle(color: AppColors.ivory)),
+                  const Text(
+                    'Volume',
+                    style: TextStyle(color: AppColors.ivory),
+                  ),
                   Expanded(
                     child: Slider(
                       value: AudioService.instance.volume,
@@ -502,9 +521,12 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 ],
               ),
               SwitchListTile(
-                title: const Text('Mute', style: TextStyle(color: AppColors.ivory)),
+                title: const Text(
+                  'Mute',
+                  style: TextStyle(color: AppColors.ivory),
+                ),
                 value: AudioService.instance.muted,
-                activeColor: AppColors.gold,
+                activeThumbColor: AppColors.gold,
                 onChanged: (v) async {
                   await AudioService.instance.toggleMute();
                   setSheetState(() {});
@@ -536,8 +558,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                   color: team == 'teamA'
                       ? AppColors.teamA
                       : team == 'teamB'
-                          ? AppColors.teamB
-                          : AppColors.silver.withValues(alpha: 0.3),
+                      ? AppColors.teamB
+                      : AppColors.silver.withValues(alpha: 0.3),
                 ),
               );
             }(),
@@ -563,16 +585,25 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         return Stack(
           children: [
             _buildOpponentArea(
-              game, topSeat, Alignment.topCenter,
-              const EdgeInsets.only(top: 8), cardW,
+              game,
+              topSeat,
+              Alignment.topCenter,
+              const EdgeInsets.only(top: 8),
+              cardW,
             ),
             _buildOpponentArea(
-              game, leftSeat, Alignment.centerLeft,
-              const EdgeInsets.only(left: 8), cardW,
+              game,
+              leftSeat,
+              Alignment.centerLeft,
+              const EdgeInsets.only(left: 8),
+              cardW,
             ),
             _buildOpponentArea(
-              game, rightSeat, Alignment.centerRight,
-              const EdgeInsets.only(right: 8), cardW,
+              game,
+              rightSeat,
+              Alignment.centerRight,
+              const EdgeInsets.only(right: 8),
+              cardW,
             ),
             Center(child: _buildTrickArea(game, mySeat, cardW)),
           ],
@@ -617,9 +648,11 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                   if (player?.isBot == true)
                     Padding(
                       padding: const EdgeInsets.only(right: 3),
-                      child: Icon(Icons.smart_toy,
-                          color: isActive ? AppColors.gold : AppColors.silver,
-                          size: 11),
+                      child: Icon(
+                        Icons.smart_toy,
+                        color: isActive ? AppColors.gold : AppColors.silver,
+                        size: 11,
+                      ),
                     ),
                   Flexible(
                     child: Text(
@@ -627,8 +660,9 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                       style: TextStyle(
                         color: isActive ? AppColors.gold : AppColors.ivory,
                         fontSize: 11,
-                        fontWeight:
-                            isActive ? FontWeight.bold : FontWeight.normal,
+                        fontWeight: isActive
+                            ? FontWeight.bold
+                            : FontWeight.normal,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -636,11 +670,14 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 ],
               ),
               if (player?.isBot == true && isActive)
-                Text('thinking...',
-                        style: TextStyle(
-                            color: AppColors.gold.withValues(alpha: 0.6),
-                            fontSize: 9,
-                            fontStyle: FontStyle.italic))
+                Text(
+                      'thinking...',
+                      style: TextStyle(
+                        color: AppColors.gold.withValues(alpha: 0.6),
+                        fontSize: 9,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    )
                     .animate(onPlay: (c) => c.repeat())
                     .fadeIn(duration: 600.ms)
                     .then()
@@ -651,8 +688,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 children: [
                   for (var i = 0; i < (cardCount.clamp(0, 5)); i++)
                     Padding(
-                      padding:
-                          EdgeInsets.only(left: i > 0 ? -cardW * 0.5 : 0),
+                      padding: EdgeInsets.only(left: i > 0 ? -cardW * 0.5 : 0),
                       child: PlayingCardWidget(width: cardW * 0.55),
                     ),
                   if (cardCount > 5)
@@ -661,7 +697,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                       child: Text(
                         '+${cardCount - 5}',
                         style: const TextStyle(
-                          color: AppColors.silver, fontSize: 10,
+                          color: AppColors.silver,
+                          fontSize: 10,
                         ),
                       ),
                     ),
@@ -674,8 +711,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 style: TextStyle(
                   color: player != null
                       ? (GameState.teamForSeat(seat) == 'teamA'
-                          ? AppColors.teamA
-                          : AppColors.teamB)
+                            ? AppColors.teamA
+                            : AppColors.teamB)
                       : AppColors.silver,
                   fontSize: 9,
                 ),
@@ -722,18 +759,16 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
             Center(
               child: Transform.translate(
                 offset: positions[plays[i].seat] ?? Offset.zero,
-                child: PlayingCardWidget(
-                  card: plays[i].card,
-                  width: cardW * 0.85,
-                )
-                    .animate()
-                    .fadeIn(duration: 200.ms)
-                    .scale(
-                      begin: const Offset(0.6, 0.6),
-                      end: const Offset(1, 1),
-                      duration: 250.ms,
-                      curve: Curves.easeOutBack,
-                    ),
+                child:
+                    PlayingCardWidget(card: plays[i].card, width: cardW * 0.85)
+                        .animate()
+                        .fadeIn(duration: 200.ms)
+                        .scale(
+                          begin: const Offset(0.6, 0.6),
+                          end: const Offset(1, 1),
+                          duration: 250.ms,
+                          curve: Curves.easeOutBack,
+                        ),
               ),
             ),
         ],
