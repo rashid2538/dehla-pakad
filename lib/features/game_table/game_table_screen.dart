@@ -112,7 +112,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       );
     }
     _botController?.onGameStateChanged(game);
-    _selectedCardId = null;
 
     final prev = _prevGame;
     _prevGame = game;
@@ -126,6 +125,10 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       _showTrickWin = false;
       _showTenCollected = false;
       _showTrumpBanner = false;
+    }
+
+    if (game.currentTurnSeat != prev.currentTurnSeat) {
+      _selectedCardId = null;
     }
 
     final myTeam = GameState.teamForSeat(mySeat);
