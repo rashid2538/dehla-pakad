@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 
 import '../models/game_state.dart';
 import '../models/player.dart';
+import '../models/playing_card.dart';
+import '../utils/card_rules.dart' show canClaimRemaining, unseenCards;
 import 'bot_engine.dart';
 import 'game_service.dart';
 
@@ -107,9 +109,24 @@ class BotController {
       // Use cached hand — fall back to Firestore if cache miss
       var hand = _botHands[player.uid];
       if (hand == null || hand.isEmpty) {
-        hand = await _gameService.getBotHand(gameId, player.uid);
+        hand = await _gameService.readHand(gameId, player.uid);
         if (hand.isEmpty || _disposed) return;
         _botHands[player.uid] = List<String>.from(hand);
+      }
+
+      // On lead with nothing the others can beat — end it instead of
+      // playing out tricks whose outcome is already fixed.
+      if (state.currentTrick?.plays.isEmpty ?? false) {
+        final cards = hand.map(PlayingCard.fromId).toList();
+        if (canClaimRemaining(
+          hand: cards,
+          unseen: unseenCards(state, cards),
+          trump: state.trumpSuit,
+        )) {
+          debugPrint('Bot ${player.displayName} claims the rest');
+          await _gameService.claimRemaining(gameId, player.uid, seat);
+          return;
+        }
       }
 
       debugPrint(

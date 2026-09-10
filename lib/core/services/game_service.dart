@@ -7,7 +7,8 @@ import 'package:uuid/uuid.dart';
 import '../models/game_state.dart';
 import '../models/player.dart';
 import '../models/playing_card.dart';
-import '../utils/card_rules.dart' show evaluateWinner;
+import '../utils/card_rules.dart'
+    show canClaimRemaining, evaluateWinner, teamLabel, unseenCards;
 import '../utils/bot_names.dart';
 
 final gameServiceProvider = Provider((ref) => GameService());
@@ -219,11 +220,19 @@ class GameService {
     });
   }
 
-  Future<List<String>> getBotHand(String gameId, String botUid) async {
-    final doc = await _firestore
-        .doc('games/$gameId/privateHands/$botUid')
-        .get();
-    return (doc.data()?['cards'] as List<dynamic>?)?.cast<String>() ?? [];
+  /// Reads one private hand. Rules allow the owner (any uid) and the host
+  /// (bot hands only).
+  /// [dealt] returns the hand as dealt (kept for the result screen) instead of
+  /// the cards still unplayed. Falls back to the live hand for games dealt
+  /// before 'dealt' was recorded.
+  Future<List<String>> readHand(String gameId, String uid,
+      {bool dealt = false}) async {
+    final data = await _firestore
+        .doc('games/$gameId/privateHands/$uid')
+        .get()
+        .then((d) => d.data());
+    final key = dealt && data?['dealt'] != null ? 'dealt' : 'cards';
+    return (data?[key] as List<dynamic>?)?.cast<String>() ?? [];
   }
 
   // ── Player Name Update ──
@@ -282,7 +291,7 @@ class GameService {
       for (final entry in hands.entries) {
         tx.set(
           _firestore.doc('games/$gameId/privateHands/${entry.key}'),
-          {'cards': entry.value},
+          {'cards': entry.value, 'dealt': entry.value},
         );
       }
 
@@ -308,6 +317,8 @@ class GameService {
         'trickPileB': const TrickPile().toMap(),
         'winningTeam': null,
         'victoryType': null,
+        'endReason': null,
+        'finalHands': null,
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
@@ -485,14 +496,14 @@ class GameService {
      *   - 2-2 tens with a team at 7+ tricks
      *   - all 13 tricks played
      */
-    final winningTeam = evaluateWinner(
+    final outcome = evaluateWinner(
       collectedTens: tensUpdates,
       trickCounts: {'teamA': newTrickCountA, 'teamB': newTrickCountB},
     );
+    final winningTeam = outcome.team;
 
-    final bool gameOver = winningTeam != null;
-
-    if (gameOver) {
+    if (winningTeam != null) {
+      updates['endReason'] = outcome.reason;
       final allFourTens = winningTeam == 'teamA'
           ? teamATens == 4
           : teamBTens == 4;
@@ -553,6 +564,129 @@ class GameService {
     );
   }
 
+  /// Ends the game when the player on lead provably wins every remaining
+  /// trick (see [canClaimRemaining]). All remaining tricks and every
+  /// uncollected 10 go to their team — playing them out cannot change a thing.
+  ///
+  /// A no-op unless the claim still holds against the state read inside the
+  /// transaction, so a stale client can't cut a live game short.
+  Future<void> claimRemaining(String gameId, String uid, int seat) async {
+    final gameRef = _firestore.doc('games/$gameId');
+    final handRef = _firestore.doc('games/$gameId/privateHands/$uid');
+
+    await _firestore.runTransaction((tx) async {
+      final gameSnap = await tx.get(gameRef);
+      final handSnap = await tx.get(handRef);
+      final game = GameState.fromFirestore(gameSnap.data()!, gameId);
+      final handIds =
+          (handSnap.data()?['cards'] as List<dynamic>?)?.cast<String>() ?? [];
+
+      if (game.status != GameStatus.inProgress) return;
+      if (game.currentTurnSeat != seat) return;
+      // Must be on lead — a claim mid-trick isn't safe to evaluate.
+      if (game.currentTrick == null || game.currentTrick!.plays.isNotEmpty) {
+        return;
+      }
+
+      final hand = handIds.map(PlayingCard.fromId).toList();
+      if (!canClaimRemaining(
+        hand: hand,
+        unseen: unseenCards(game, hand),
+        trump: game.trumpSuit,
+      )) {
+        return;
+      }
+
+      final team = GameState.teamForSeat(seat);
+      final remainingTricks =
+          13 - game.trickPileA.trickCount - game.trickPileB.trickCount;
+
+      // Every remaining trick — and so every uncollected 10 — goes to [team].
+      final tens = Map<String, String?>.from(game.collectedTens.tens);
+      final unclaimedTens =
+          tens.entries.where((e) => e.value == null).map((e) => e.key).toList();
+      for (final id in unclaimedTens) {
+        tens[id] = team;
+      }
+
+      final isTeamA = team == 'teamA';
+      final trickCounts = {
+        'teamA': game.trickPileA.trickCount + (isTeamA ? remainingTricks : 0),
+        'teamB': game.trickPileB.trickCount + (isTeamA ? 0 : remainingTricks),
+      };
+
+      final outcome =
+          evaluateWinner(collectedTens: tens, trickCounts: trickCounts);
+      final winningTeam = outcome.team;
+      if (winningTeam == null) return; // defensive: shouldn't happen
+
+      final pileKey = isTeamA ? 'trickPileA' : 'trickPileB';
+      final pile = isTeamA ? game.trickPileA : game.trickPileB;
+
+      final updates = <String, dynamic>{
+        'collectedTens': Map<String, dynamic>.from(tens),
+        pileKey: TrickPile(
+          trickCount: pile.trickCount + remainingTricks,
+          cards: [...pile.cards, ...handIds],
+        ).toMap(),
+        'status': GameStatus.completed.name,
+        'currentTurnSeat': null,
+        'endReason': _claimReason(game, seat, hand.length, remainingTricks,
+            unclaimedTens.length, outcome.reason),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      final tensForWinner =
+          tens.values.where((t) => t == winningTeam).length;
+      _setVictory(updates, winningTeam, game, updates,
+          allFourTens: tensForWinner == 4);
+
+      for (final p in game.players) {
+        if (p.isBot) updates['seats.${p.seat}.ready'] = true;
+      }
+
+      tx.update(gameRef, updates);
+    });
+  }
+
+  String _claimReason(GameState game, int seat, int cards, int tricks,
+      int tens, String? outcomeReason) {
+    final name = game.seats[seat]?.displayName ?? 'The leader';
+    final team = teamLabel(GameState.teamForSeat(seat));
+    final trump = game.trumpSuit?.symbol ?? '';
+    final tensPart = tens == 0
+        ? ''
+        : ' and the last ${tens == 1 ? "10" : "$tens 10s"}';
+    return "$name was on lead holding $cards unbeatable "
+        "${cards == 1 ? "card" : "cards"} (trump $trump) — nobody could take a "
+        "trick back, so the remaining $tricks "
+        "${tricks == 1 ? "trick" : "tricks"}$tensPart went to $team. "
+        "${outcomeReason ?? ''}"
+        .trim();
+  }
+
+  /// After a game ends, publishes this player's dealt hand (and every bot's,
+  /// if we're the host) so the result screen can show all four hands. Which of
+  /// those cards were actually played is already public, in the trick piles.
+  /// Each client publishes only what it is allowed to read.
+  Future<void> publishFinalHands(String gameId, String uid) async {
+    final game = await getGame(gameId);
+    if (game == null || game.status != GameStatus.completed) return;
+    final me = game.seatForUid(uid);
+    if (me == null) return;
+
+    final updates = <String, dynamic>{
+      'finalHands.${me.seat}': await readHand(gameId, uid, dealt: true),
+    };
+    if (game.hostId == uid) {
+      for (final p in game.players.where((p) => p.isBot)) {
+        updates['finalHands.${p.seat}'] =
+            await readHand(gameId, p.uid, dealt: true);
+      }
+    }
+    await _firestore.doc('games/$gameId').update(updates);
+  }
+
   // ── Next Game ──
 
   Future<void> confirmNextGame(String gameId, String uid,
@@ -599,7 +733,7 @@ class GameService {
       for (final entry in hands.entries) {
         tx.set(
           _firestore.doc('games/$gameId/privateHands/${entry.key}'),
-          {'cards': entry.value},
+          {'cards': entry.value, 'dealt': entry.value},
         );
       }
 
@@ -624,6 +758,8 @@ class GameService {
         'trickPileB': const TrickPile().toMap(),
         'winningTeam': null,
         'victoryType': null,
+        'endReason': null,
+        'finalHands': null,
         'previousTrumpSetterSeat': game.trumpSetterSeat,
         'previousVictoryType': game.victoryType?.name,
         'previousWinningTeam': game.winningTeam,
@@ -727,6 +863,8 @@ class GameService {
         'trickPileB': const TrickPile().toMap(),
         'winningTeam': null,
         'victoryType': null,
+        'endReason': null,
+        'finalHands': null,
         'previousTrumpSetterSeat': null,
         'previousVictoryType': null,
         'previousWinningTeam': null,

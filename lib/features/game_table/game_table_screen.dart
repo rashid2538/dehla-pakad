@@ -13,7 +13,8 @@ import '../../core/services/audio_service.dart';
 import '../../core/services/bot_controller.dart';
 import '../../core/services/game_service.dart';
 import '../../core/theme.dart';
-import '../../core/utils/card_rules.dart' show getLegalCards;
+import '../../core/utils/card_rules.dart'
+    show canClaimRemaining, getLegalCards, unseenCards;
 import '../../shared_widgets/playing_card_widget.dart';
 
 class GameTableScreen extends ConsumerStatefulWidget {
@@ -31,6 +32,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   late final Stream<List<String>> _handStream;
   bool _playing = false;
   bool _resolvingTrick = false;
+  int? _claimedTrick;
   BotController? _botController;
   Timer? _trickWatchTimer;
   GameState? _lastGame;
@@ -151,6 +153,24 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         ],
       ),
     );
+  }
+
+  /// On lead holding only cards nobody can beat — end the game rather than
+  /// play out tricks whose outcome is already fixed. [GameService] re-checks
+  /// this in a transaction, so a stale read here can only cost a no-op.
+  void _maybeClaimRest(GameState game, List<PlayingCard> hand, int mySeat) {
+    if (_claimedTrick == game.trickNumber) return;
+    if (game.status != GameStatus.inProgress) return;
+    if (game.currentTrick?.plays.isEmpty != true) return;
+    if (!canClaimRemaining(
+      hand: hand,
+      unseen: unseenCards(game, hand),
+      trump: game.trumpSuit,
+    )) {
+      return;
+    }
+    _claimedTrick = game.trickNumber;
+    ref.read(gameServiceProvider).claimRemaining(widget.gameId, _uid, mySeat);
   }
 
   Future<void> _playCard(int mySeat, String cardId) async {
@@ -378,6 +398,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                   final legalCards = isMyTurn
                       ? getLegalCards(hand, leadSuit).map((c) => c.id).toSet()
                       : <String>{};
+
+                  if (isMyTurn) _maybeClaimRest(game, hand, mySeat);
 
                   return SafeArea(
                     child: Stack(

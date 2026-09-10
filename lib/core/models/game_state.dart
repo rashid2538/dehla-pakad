@@ -128,6 +128,12 @@ class GameState {
   final TrickPile trickPileB;
   final String? winningTeam;
   final VictoryType? victoryType;
+  /// Human-readable explanation of how the game ended. Written once, at the
+  /// moment the game is marked completed.
+  final String? endReason;
+  /// Remaining cards per seat, published by each client after the game ends
+  /// so the result screen can show every hand. Empty during play.
+  final Map<int, List<String>> finalHands;
   final int? previousTrumpSetterSeat;
   final VictoryType? previousVictoryType;
   final String? previousWinningTeam;
@@ -153,6 +159,8 @@ class GameState {
     this.trickPileB = const TrickPile(),
     this.winningTeam,
     this.victoryType,
+    this.endReason,
+    this.finalHands = const {},
     this.previousTrumpSetterSeat,
     this.previousVictoryType,
     this.previousWinningTeam,
@@ -199,6 +207,7 @@ class GameState {
         'trickPileB': trickPileB.toMap(),
         'winningTeam': winningTeam,
         'victoryType': victoryType?.name,
+        'endReason': endReason,
         'previousTrumpSetterSeat': previousTrumpSetterSeat,
         'previousVictoryType': previousVictoryType?.name,
         'previousWinningTeam': previousWinningTeam,
@@ -241,6 +250,12 @@ class GameState {
           TrickPile.fromMap(m['trickPileB'] as Map<String, dynamic>?),
       winningTeam: m['winningTeam'] as String?,
       victoryType: VictoryType.fromString(m['victoryType'] as String?),
+      endReason: m['endReason'] as String?,
+      finalHands: {
+        for (final e in (m['finalHands'] as Map<String, dynamic>? ?? {}).entries)
+          if (int.tryParse(e.key) != null)
+            int.parse(e.key): (e.value as List<dynamic>?)?.cast<String>() ?? [],
+      },
       previousTrumpSetterSeat: m['previousTrumpSetterSeat'] as int?,
       previousVictoryType:
           VictoryType.fromString(m['previousVictoryType'] as String?),

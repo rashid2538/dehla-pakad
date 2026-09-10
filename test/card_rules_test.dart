@@ -72,12 +72,12 @@ void main() {
   test('evaluateWinner — all 4 tens to one team', () {
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamA', '10C': 'teamA'};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 5, 'teamB': 3}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 5, 'teamB': 3}).team,
       'teamA',
     );
     final tensB = {'10S': 'teamB', '10H': 'teamB', '10D': 'teamB', '10C': 'teamB'};
     expect(
-      evaluateWinner(collectedTens: tensB, trickCounts: {'teamA': 2, 'teamB': 6}),
+      evaluateWinner(collectedTens: tensB, trickCounts: {'teamA': 2, 'teamB': 6}).team,
       'teamB',
     );
   });
@@ -85,27 +85,123 @@ void main() {
   test('evaluateWinner — 3-1 tens ends early', () {
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamA', '10C': 'teamB'};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 4, 'teamB': 4}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 4, 'teamB': 4}).team,
       'teamA',
     );
   });
 
-  test('evaluateWinner — 3-0 tens ends early', () {
+  test('evaluateWinner — 3-0 tens plays on until the last ten falls', () {
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamA', '10C': null};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 3, 'teamB': 4}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 3, 'teamB': 4}).team,
+      isNull,
+    );
+    // Once the fourth ten is won, it ends — whichever way it goes.
+    final all = {...tens, '10C': 'teamB'};
+    expect(
+      evaluateWinner(collectedTens: all, trickCounts: {'teamA': 3, 'teamB': 4}).team,
       'teamA',
     );
+  });
+
+  test('evaluateWinner — 2-2 at 7 tricks waits for the last two tens', () {
+    final tens = {'10S': 'teamA', '10H': 'teamB', '10D': null, '10C': null};
+    expect(
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 8, 'teamB': 2}).team,
+      isNull,
+    );
+  });
+
+  test('evaluateWinner — reasons explain the ending', () {
+    final all = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamA', '10C': 'teamA'};
+    expect(
+      evaluateWinner(collectedTens: all, trickCounts: {'teamA': 5, 'teamB': 3}).reason,
+      contains('all four 10s'),
+    );
+    final split = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamB', '10C': 'teamB'};
+    expect(
+      evaluateWinner(collectedTens: split, trickCounts: {'teamA': 7, 'teamB': 4}).reason,
+      contains('tricks decide'),
+    );
+  });
+
+  group('canClaimRemaining', () {
+    List<PlayingCard> cards(List<String> ids) =>
+        ids.map(PlayingCard.fromId).toList();
+
+    test('all trumps, none higher outstanding', () {
+      expect(
+        canClaimRemaining(
+          hand: cards(['AS', 'KS']),
+          unseen: cards(['QS', '2H', '3D', '4C']),
+          trump: Suit.spades,
+        ),
+        isTrue,
+      );
+    });
+
+    test('opponents hold no trump at all', () {
+      // Low trumps still win every trick when nobody else has one.
+      expect(
+        canClaimRemaining(
+          hand: cards(['2S', '3S']),
+          unseen: cards(['AH', 'KH', 'AD', 'AC']),
+          trump: Suit.spades,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a higher trump is still out', () {
+      expect(
+        canClaimRemaining(
+          hand: cards(['KS', 'QS']),
+          unseen: cards(['AS', '2H']),
+          trump: Suit.spades,
+        ),
+        isFalse,
+      );
+    });
+
+    test('top plain cards win only when no trump can ruff', () {
+      expect(
+        canClaimRemaining(
+          hand: cards(['AH', 'KH']),
+          unseen: cards(['QH', 'JH', '2D', '3C']),
+          trump: Suit.spades,
+        ),
+        isTrue,
+      );
+      expect(
+        canClaimRemaining(
+          hand: cards(['AH', 'KH']),
+          unseen: cards(['QH', '2S']),
+          trump: Suit.spades,
+        ),
+        isFalse,
+      );
+    });
+
+    test('never claims before trump is set', () {
+      expect(
+        canClaimRemaining(
+          hand: cards(['AH', 'KH']),
+          unseen: cards(['QH', 'JH']),
+          trump: null,
+        ),
+        isFalse,
+      );
+    });
   });
 
   test('evaluateWinner — 2-2 tens, 7+ tricks wins', () {
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamB', '10C': 'teamB'};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 6, 'teamB': 7}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 6, 'teamB': 7}).team,
       'teamB',
     );
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 7, 'teamB': 6}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 7, 'teamB': 6}).team,
       'teamA',
     );
   });
@@ -114,17 +210,17 @@ void main() {
     // Tens not all collected and 3-x / 2-2+7 not reached yet.
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamB', '10C': null};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 3, 'teamB': 2}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 3, 'teamB': 2}).team,
       isNull,
     );
     final twoTwo = {'10S': 'teamA', '10H': 'teamB', '10D': 'teamA', '10C': 'teamB'};
     expect(
-      evaluateWinner(collectedTens: twoTwo, trickCounts: {'teamA': 6, 'teamB': 5}),
+      evaluateWinner(collectedTens: twoTwo, trickCounts: {'teamA': 6, 'teamB': 5}).team,
       isNull,
     );
     final low = {'10S': null, '10H': null, '10D': null, '10C': null};
     expect(
-      evaluateWinner(collectedTens: low, trickCounts: {'teamA': 6, 'teamB': 5}),
+      evaluateWinner(collectedTens: low, trickCounts: {'teamA': 6, 'teamB': 5}).team,
       isNull,
     );
   });
@@ -132,11 +228,11 @@ void main() {
   test('evaluateWinner — 13 tricks, 2-2 ties broken by tricks', () {
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamB', '10C': 'teamB'};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 7, 'teamB': 6}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 7, 'teamB': 6}).team,
       'teamA',
     );
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 6, 'teamB': 7}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 6, 'teamB': 7}).team,
       'teamB',
     );
   });
@@ -144,7 +240,7 @@ void main() {
   test('evaluateWinner — 13 tricks, tens difference decides', () {
     final tens = {'10S': 'teamA', '10H': 'teamA', '10D': 'teamB', '10C': null};
     expect(
-      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 6, 'teamB': 7}),
+      evaluateWinner(collectedTens: tens, trickCounts: {'teamA': 6, 'teamB': 7}).team,
       'teamA',
     );
   });

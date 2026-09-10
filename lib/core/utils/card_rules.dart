@@ -58,16 +58,21 @@ TrickPlay trickWinner(List<TrickPlay> plays, Suit leadSuit, Suit? trumpSuit) {
   return (winningTeam: winner, immediate: false);
 }
 
+String teamLabel(String team) => team.replaceAll('team', 'Team ');
+
 /// Deterministic end-of-game evaluation. Single source of truth used by the
 /// game service to decide when a game must stop. Returns the winning team's
-/// name, or null if the game should continue.
+/// name plus a human-readable reason, or a null team if the game continues.
 ///
-/// Covers every no-draw termination rule:
-///  - All 4 tens to one team
-///  - 3+ tens vs fewer tens (3-1 or 3-0 split)
-///  - 2-2 tens with a team at 7+ tricks
-///  - All 13 tricks played (tens, then tricks, as tie-breakers)
-String? evaluateWinner({
+/// Hard gate: a game never ends before all four 10s have been won. Until then
+/// the outcome is not settled no matter how the tricks fall.
+///
+/// Once all four 10s are in:
+///  - 4-0 → that team wins
+///  - 3-1 → the team holding three wins
+///  - 2-2 → the first team to 7 tricks wins (majority of 13)
+///  - otherwise play on to trick 13, where the trick count decides
+({String? team, String? reason}) evaluateWinner({
   required Map<String, String?> collectedTens,
   required Map<String, int> trickCounts,
 }) {
@@ -77,27 +82,88 @@ String? evaluateWinner({
   final tricksB = trickCounts['teamB'] ?? 0;
   final totalTricks = tricksA + tricksB;
 
-  // All four tens to one team — immediate win.
-  if (teamATens == 4) return 'teamA';
-  if (teamBTens == 4) return 'teamB';
+  ({String? team, String? reason}) win(String team, String reason) =>
+      (team: team, reason: reason);
 
-  // Three tens (or more than the opponent has collected) — the holder wins.
-  if (teamATens >= 3 && teamATens > teamBTens) return 'teamA';
-  if (teamBTens >= 3 && teamBTens > teamATens) return 'teamB';
-
-  // Two-all split: whoever reaches 7+ tricks wins immediately.
-  if (teamATens == 2 && teamBTens == 2) {
-    if (tricksA >= 7) return 'teamA';
-    if (tricksB >= 7) return 'teamB';
+  // No early finish while a 10 is still live, even when the outcome already
+  // looks settled — every 10 has to be won first.
+  if (teamATens + teamBTens == 4) {
+    if (teamATens == 4 || teamBTens == 4) {
+      final t = teamATens == 4 ? 'teamA' : 'teamB';
+      return win(t, '${teamLabel(t)} collected all four 10s.');
+    }
+    if (teamATens != teamBTens) {
+      final t = teamATens > teamBTens ? 'teamA' : 'teamB';
+      final hi = teamATens > teamBTens ? teamATens : teamBTens;
+      return win(t, 'All four 10s are in and ${teamLabel(t)} took $hi of '
+          'them ($teamATens–$teamBTens).');
+    }
+    // 2-2 split: whoever reaches 7 tricks has an unbeatable majority of 13.
+    if (tricksA >= 7 || tricksB >= 7) {
+      final t = tricksA >= 7 ? 'teamA' : 'teamB';
+      final n = tricksA >= 7 ? tricksA : tricksB;
+      return win(t, '10s split 2–2, so tricks decide — ${teamLabel(t)} took '
+          '$n of 13, an unbeatable majority.');
+    }
   }
 
   // End of game (all 13 tricks played) — tens first, then tricks.
   if (totalTricks >= 13) {
-    if (teamATens != teamBTens) return teamATens > teamBTens ? 'teamA' : 'teamB';
-    return tricksA > tricksB ? 'teamA' : 'teamB';
+    if (teamATens != teamBTens) {
+      final t = teamATens > teamBTens ? 'teamA' : 'teamB';
+      return win(t, 'All 13 tricks played — ${teamLabel(t)} collected more '
+          '10s ($teamATens–$teamBTens).');
+    }
+    final t = tricksA > tricksB ? 'teamA' : 'teamB';
+    return win(t, 'All 13 tricks played — 10s split 2–2, so the trick '
+        'majority ($tricksA–$tricksB) decides.');
   }
 
-  return null;
+  return (team: null, reason: null);
+}
+
+/// Cards the owner of [hand] has not seen: full deck minus every card already
+/// played minus their own hand. Derived from public state only, so any client
+/// can compute it without reading another player's private hand.
+List<PlayingCard> unseenCards(GameState game, List<PlayingCard> hand) {
+  final seen = <String>{
+    ...game.trickPileA.cards,
+    ...game.trickPileB.cards,
+    ...?game.currentTrick?.plays.map((p) => p.card.id),
+    ...hand.map((c) => c.id),
+  };
+  return PlayingCard.fullDeck.where((c) => !seen.contains(c.id)).toList();
+}
+
+/// True when the player *on lead* holding [hand] takes every remaining trick
+/// no matter how the [unseen] cards are split among the other three seats.
+///
+/// A card is unbeatable when:
+///  - it is a trump and no higher trump is unseen, or
+///  - no trump is unseen at all (nobody can ruff) and no higher card of its
+///    own suit is unseen.
+///
+/// [unseen] includes the partner's cards, so a partner can never overtake and
+/// steal the lead either — the claimer keeps leading until the hand is out.
+///
+/// Sound, not complete: it never claims a position that could be lost, but it
+/// misses claims that need a specific play order (e.g. drawing trumps first).
+/// Requires trump to be set — before that, any off-suit play would create
+/// trump and win the trick.
+bool canClaimRemaining({
+  required List<PlayingCard> hand,
+  required List<PlayingCard> unseen,
+  required Suit? trump,
+}) {
+  if (trump == null || hand.isEmpty || unseen.isEmpty) return false;
+  final unseenTrumps = unseen.where((c) => c.suit == trump).toList();
+  return hand.every((c) {
+    if (c.suit == trump) {
+      return !unseenTrumps.any((t) => t.rank.value > c.rank.value);
+    }
+    return unseenTrumps.isEmpty &&
+        !unseen.any((u) => u.suit == c.suit && u.rank.value > c.rank.value);
+  });
 }
 
 VictoryType determineVictoryType(String winningTeam, String? trumpTeam) =>

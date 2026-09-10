@@ -11,6 +11,7 @@ import '../../core/models/playing_card.dart';
 import '../../core/services/audio_service.dart';
 import '../../core/services/game_service.dart';
 import '../../core/theme.dart';
+import '../../shared_widgets/playing_card_widget.dart';
 
 class GameResultScreen extends ConsumerStatefulWidget {
   final String gameId;
@@ -25,6 +26,7 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
   late final Stream<GameState> _gameStream;
   bool _confirmed = false;
   bool _soundPlayed = false;
+  bool _handsPublished = false;
 
   @override
   void initState() {
@@ -64,6 +66,13 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
             final myTeam = mySeat != null ? GameState.teamForSeat(mySeat.seat) : null;
             final isWinner = myTeam == game.winningTeam;
 
+            if (!_handsPublished && game.status == GameStatus.completed) {
+              _handsPublished = true;
+              ref
+                  .read(gameServiceProvider)
+                  .publishFinalHands(widget.gameId, _uid);
+            }
+
             if (!_soundPlayed && game.status == GameStatus.completed) {
               _soundPlayed = true;
               if (isWinner) {
@@ -82,12 +91,12 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                   if (isWinner) _ConfettiOverlay(),
                   if (!isWinner && game.victoryType == VictoryType.poopy)
                     _PoopOverlay(),
-                  Padding(
+                  SingleChildScrollView(
                     padding: const EdgeInsets.all(24),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Spacer(),
+                        const SizedBox(height: 16),
                         Text(
                           isWinner
                               ? switch (game.victoryType) {
@@ -135,6 +144,18 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                                 duration: 800.ms,
                                 color: AppColors.gold.withValues(alpha: 0.3),
                               ),
+                        if (game.endReason != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            game.endReason!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: AppColors.ivory,
+                              fontSize: 14,
+                              height: 1.4,
+                            ),
+                          ).animate().fadeIn(delay: 300.ms),
+                        ],
                         const SizedBox(height: 32),
                         _buildBreakdown(game)
                             .animate()
@@ -142,7 +163,9 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                             .slideY(begin: 0.2, end: 0),
                         const SizedBox(height: 32),
                         _buildTensDisplay(game),
-                        const Spacer(),
+                        const SizedBox(height: 24),
+                        _buildFinalHands(game),
+                        const SizedBox(height: 24),
                         Text(
                           '$confirmedCount/4 ready for next game',
                           style: const TextStyle(
@@ -285,6 +308,86 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
           ),
         ],
       ],
+    );
+  }
+
+  /// Every player's dealt hand, with the cards they actually played dimmed —
+  /// what was left when the game ended stays bright.
+  Widget _buildFinalHands(GameState game) {
+    if (game.finalHands.isEmpty) return const SizedBox.shrink();
+    final played = {
+      ...game.trickPileA.cards,
+      ...game.trickPileB.cards,
+      ...?game.currentTrick?.plays.map((p) => p.card.id),
+    };
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Hands',
+              style: TextStyle(
+                color: AppColors.silver,
+                fontSize: 12,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (int seat = 1; seat <= 4; seat++)
+              if (game.seats[seat] != null)
+                _handRow(game, seat, game.finalHands[seat] ?? const [], played),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _handRow(
+    GameState game,
+    int seat,
+    List<String> dealt,
+    Set<String> played,
+  ) {
+    final player = game.seats[seat]!;
+    final team = GameState.teamForSeat(seat);
+    final cards = dealt.map(PlayingCard.fromId).toList()
+      ..sort((a, b) => a.suit.index != b.suit.index
+          ? a.suit.index - b.suit.index
+          : b.rank.value - a.rank.value);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            player.displayName,
+            style: TextStyle(
+              color: team == 'teamA' ? AppColors.teamA : AppColors.teamB,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          if (cards.isEmpty)
+            const Text('—', style: TextStyle(color: AppColors.silver))
+          else
+            Wrap(
+              spacing: 2,
+              runSpacing: 2,
+              children: [
+                for (final c in cards)
+                  Opacity(
+                    opacity: played.contains(c.id) ? 0.28 : 1,
+                    child: PlayingCardWidget(card: c, width: 22),
+                  ),
+              ],
+            ),
+        ],
+      ),
     );
   }
 
