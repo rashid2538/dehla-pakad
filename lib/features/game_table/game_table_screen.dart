@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -28,8 +30,11 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   late final Stream<GameState> _gameStream;
   late final Stream<List<String>> _handStream;
   bool _playing = false;
+  bool _resolvingTrick = false;
   String? _selectedCardId;
   BotController? _botController;
+  Timer? _trickWatchTimer;
+  GameState? _lastGame;
 
   GameState? _prevGame;
   bool _showTrumpBanner = false;
@@ -49,10 +54,23 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     final svc = ref.read(gameServiceProvider);
     _gameStream = svc.gameStream(widget.gameId);
     _handStream = svc.handStream(widget.gameId, _uid);
+
+    // Sticky trick-watcher: guaranteed fallback that resolves any trick whose
+    // 4th card has been played but which hasn't been resolved yet (e.g. UI
+    // callbacks dropped because the widget was unmounted mid-play).
+    _trickWatchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final game = _lastGame;
+      if (game == null || !mounted) return;
+      if (game.status != GameStatus.inProgress) return;
+      if (game.currentTurnSeat != null) return;
+      if (game.currentTrick?.plays.length != 4) return;
+      _scheduleResolveTrick(game, isTransition: false);
+    });
   }
 
   @override
   void dispose() {
+    _trickWatchTimer?.cancel();
     _botController?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -70,11 +88,78 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   void _onCardTap(int mySeat, String cardId) {
     if (_playing) return;
     if (_selectedCardId == cardId) {
-      _playCard(mySeat, cardId);
+      _showPlayConfirmation(mySeat, cardId);
     } else {
       setState(() => _selectedCardId = cardId);
       HapticService.selection();
     }
+  }
+
+  void _showPlayConfirmation(int mySeat, String cardId) {
+    final card = PlayingCard.fromId(cardId);
+    final suitColor = (card.suit == Suit.hearts || card.suit == Suit.diamonds)
+        ? AppColors.suitRed
+        : AppColors.suitBlack;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.maroonDark,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppColors.gold, width: 2),
+        ),
+        title: const Text(
+          'Play this card?',
+          style: TextStyle(
+            color: AppColors.gold,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            PlayingCardWidget(card: card, width: 60),
+            const SizedBox(width: 16),
+            Text(
+              '${card.rank.symbol}${card.suit.symbol}',
+              style: TextStyle(
+                color: suitColor,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              setState(() => _selectedCardId = null);
+            },
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.silver, fontSize: 14),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.gold,
+              foregroundColor: AppColors.maroonDark,
+            ),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _playCard(mySeat, cardId);
+            },
+            child: const Text(
+              'Play',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _playCard(int mySeat, String cardId) async {
@@ -99,14 +184,17 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   }
 
   void _handleGameUpdate(GameState game, int mySeat) {
+    _lastGame = game;
     // Lazily create bot controller when host has bots
     if (game.hostId == _uid &&
-        game.players.any((p) => p.isBot) &&
-        _botController == null) {
-      _botController = BotController(
-        ref.read(gameServiceProvider),
-        widget.gameId,
-      );
+        game.players.any((p) => p.isBot)) {
+      final svc = ref.read(gameServiceProvider);
+      _botController ??= BotController(svc, widget.gameId);
+      // Seed cached hands when a new round starts
+      if (svc.lastDealtHands != null) {
+        _botController!.seedHands(svc.lastDealtHands!, game);
+        svc.lastDealtHands = null;
+      }
     }
     _botController?.onGameStateChanged(game);
 
@@ -140,12 +228,14 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       }
     }
 
-    // 4th card played — let animation run, then resolve
-    if (nextPlays == 4 && prevPlays < 4 && game.currentTurnSeat == null) {
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (!mounted) return;
-        ref.read(gameServiceProvider).resolveTrick(widget.gameId);
-      });
+    // 4th card played — let animation run, then resolve.
+    // Schedule resolution on the transition (prevPlays < 4) AND as a safety
+    // net for any later emission where the trick is complete but still
+    // awaiting resolution (covers dropped/raced callbacks).
+    if (game.status == GameStatus.inProgress &&
+        game.currentTurnSeat == null &&
+        game.currentTrick?.plays.length == 4) {
+      _scheduleResolveTrick(game, isTransition: prevPlays < 4);
     }
 
     // My turn started
@@ -225,6 +315,24 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         AudioService.instance.play(GameSound.defeat);
       }
     }
+  }
+
+  /// Schedules [GameService.resolveTrick] after a short visual delay so the
+  /// 4th card animation can play. [isTransition] is true when the current
+  /// state is a fresh 4th-card emission — those get the full animation delay.
+  void _scheduleResolveTrick(GameState game, {required bool isTransition}) {
+    if (_resolvingTrick) return;
+    _resolvingTrick = true;
+    final plays = game.currentTrick?.plays ?? const [];
+    final allBotTrick =
+        plays.isNotEmpty && plays.every((p) => game.seats[p.seat]?.isBot == true);
+    final delay =
+        isTransition ? (allBotTrick ? 200 : 600) : 100;
+    Future.delayed(Duration(milliseconds: delay), () {
+      _resolvingTrick = false;
+      if (!mounted) return;
+      ref.read(gameServiceProvider).resolveTrick(widget.gameId);
+    });
   }
 
   @override
@@ -741,7 +849,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   ) {
     final player = game.seats[seat];
     final isActive = game.currentTurnSeat == seat;
-    final cardCount = 13 - game.trickNumber + 1;
+    final hasPlayed = game.currentTrick?.plays.any((p) => p.seat == seat) ?? false;
+    final cardCount = 13 - game.trickNumber + 1 - (hasPlayed ? 1 : 0);
 
     return Align(
       alignment: alignment,
@@ -966,7 +1075,26 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final n = sorted.length;
-          if (n == 0) return const SizedBox.shrink();
+          if (n == 0) {
+            // Empty hand: render a placeholder rectangle so the deck area
+            // still looks like a card slot.
+            final cardW = (constraints.maxWidth * 0.18).clamp(50.0, 100.0);
+            final cardH = cardW * 1.4;
+            return Center(
+              child: Container(
+                width: cardW,
+                height: cardH,
+                decoration: BoxDecoration(
+                  color: AppColors.maroonDark.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(cardW * 0.12),
+                  border: Border.all(
+                    color: AppColors.burgundy.withValues(alpha: 0.7),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+            );
+          }
           final availW = constraints.maxWidth;
           // Cards overlap: visible fraction ~35% per stacked card
           const visibleFrac = 0.35;

@@ -14,6 +14,20 @@ class LoginScreen extends ConsumerStatefulWidget {
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _loading = false;
 
+  Future<void> _signInAnon() async {
+    setState(() => _loading = true);
+    try {
+      await ref.read(authServiceProvider).signInAnonymously();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Anonymous sign-in failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<void> _signIn() async {
     setState(() => _loading = true);
     try {
@@ -90,6 +104,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     label: Text(
                       _loading ? 'Signing in...' : 'Sign in with Google',
                     ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: _loading ? null : _signInAnon,
+                  child: const Text(
+                    'Debug: Anonymous Login',
+                    style: TextStyle(color: AppColors.silver, fontSize: 12),
                   ),
                 ),
               ],

@@ -58,6 +58,48 @@ TrickPlay trickWinner(List<TrickPlay> plays, Suit leadSuit, Suit? trumpSuit) {
   return (winningTeam: winner, immediate: false);
 }
 
+/// Deterministic end-of-game evaluation. Single source of truth used by the
+/// game service to decide when a game must stop. Returns the winning team's
+/// name, or null if the game should continue.
+///
+/// Covers every no-draw termination rule:
+///  - All 4 tens to one team
+///  - 3+ tens vs fewer tens (3-1 or 3-0 split)
+///  - 2-2 tens with a team at 7+ tricks
+///  - All 13 tricks played (tens, then tricks, as tie-breakers)
+String? evaluateWinner({
+  required Map<String, String?> collectedTens,
+  required Map<String, int> trickCounts,
+}) {
+  final teamATens = collectedTens.values.where((t) => t == 'teamA').length;
+  final teamBTens = collectedTens.values.where((t) => t == 'teamB').length;
+  final tricksA = trickCounts['teamA'] ?? 0;
+  final tricksB = trickCounts['teamB'] ?? 0;
+  final totalTricks = tricksA + tricksB;
+
+  // All four tens to one team — immediate win.
+  if (teamATens == 4) return 'teamA';
+  if (teamBTens == 4) return 'teamB';
+
+  // Three tens (or more than the opponent has collected) — the holder wins.
+  if (teamATens >= 3 && teamATens > teamBTens) return 'teamA';
+  if (teamBTens >= 3 && teamBTens > teamATens) return 'teamB';
+
+  // Two-all split: whoever reaches 7+ tricks wins immediately.
+  if (teamATens == 2 && teamBTens == 2) {
+    if (tricksA >= 7) return 'teamA';
+    if (tricksB >= 7) return 'teamB';
+  }
+
+  // End of game (all 13 tricks played) — tens first, then tricks.
+  if (totalTricks >= 13) {
+    if (teamATens != teamBTens) return teamATens > teamBTens ? 'teamA' : 'teamB';
+    return tricksA > tricksB ? 'teamA' : 'teamB';
+  }
+
+  return null;
+}
+
 VictoryType determineVictoryType(String winningTeam, String? trumpTeam) =>
     winningTeam == trumpTeam ? VictoryType.court : VictoryType.poopy;
 

@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../models/game_state.dart';
 import '../models/player.dart';
 import '../models/playing_card.dart';
+import '../utils/card_rules.dart' show evaluateWinner;
 import '../utils/bot_names.dart';
 
 final gameServiceProvider = Provider((ref) => GameService());
@@ -15,6 +16,9 @@ class GameService {
   final _firestore = FirebaseFirestore.instance;
   static const _uuid = Uuid();
   static final _rng = Random.secure();
+
+  /// Cached hands from the last deal — consumed by BotController.
+  Map<String, List<String>>? lastDealtHands;
 
   // ── Streams ──
 
@@ -27,6 +31,12 @@ class GameService {
       .doc('games/$gameId/privateHands/$uid')
       .snapshots()
       .map((s) => (s.data()?['cards'] as List<dynamic>?)?.cast<String>() ?? []);
+
+  Future<GameState?> getGame(String gameId) async {
+    final snap = await _firestore.doc('games/$gameId').get();
+    if (!snap.exists) return null;
+    return GameState.fromFirestore(snap.data()!, gameId);
+  }
 
   // ── Lobby ──
 
@@ -238,6 +248,8 @@ class GameService {
   Future<void> startGame(String gameId, String hostUid) async {
     final ref = _firestore.doc('games/$gameId');
 
+    Map<String, List<String>>? dealtHands;
+
     await _firestore.runTransaction((tx) async {
       final snap = await tx.get(ref);
       final game = GameState.fromFirestore(snap.data()!, gameId);
@@ -298,7 +310,11 @@ class GameService {
         'victoryType': null,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      dealtHands = hands;
     });
+
+    lastDealtHands = dealtHands;
   }
 
   // ── Play Card ──
@@ -462,41 +478,26 @@ class GameService {
         ? currentPile.trickCount + 1
         : game.trickPileB.trickCount;
 
-    bool gameOver = false;
+    /* 
+     * Deterministic game-over decision (shared with card_rules.dart):
+     *   - all 4 tens to one team
+     *   - 3+ tens vs fewer tens
+     *   - 2-2 tens with a team at 7+ tricks
+     *   - all 13 tricks played
+     */
+    final winningTeam = evaluateWinner(
+      collectedTens: tensUpdates,
+      trickCounts: {'teamA': newTrickCountA, 'teamB': newTrickCountB},
+    );
 
-    if (teamATens == 4) {
-      _setVictory(updates, 'teamA', game, updates, allFourTens: true);
-      gameOver = true;
-    } else if (teamBTens == 4) {
-      _setVictory(updates, 'teamB', game, updates, allFourTens: true);
-      gameOver = true;
-    } else if (teamATens >= 3) {
-      _setVictory(updates, 'teamA', game, updates);
-      gameOver = true;
-    } else if (teamBTens >= 3) {
-      _setVictory(updates, 'teamB', game, updates);
-      gameOver = true;
-    } else if (teamATens == 2 && teamBTens == 2 &&
-               (newTrickCountA >= 7 || newTrickCountB >= 7)) {
-      final winner = newTrickCountA >= 7 ? 'teamA' : 'teamB';
-      _setVictory(updates, winner, game, updates);
-      gameOver = true;
-    } else if (game.trickNumber >= 13) {
-      if (teamATens > teamBTens) {
-        _setVictory(updates, 'teamA', game, updates);
-      } else if (teamBTens > teamATens) {
-        _setVictory(updates, 'teamB', game, updates);
-      } else {
-        if (newTrickCountA > newTrickCountB) {
-          _setVictory(updates, 'teamA', game, updates);
-        } else {
-          _setVictory(updates, 'teamB', game, updates);
-        }
-      }
-      gameOver = true;
-    }
+    final bool gameOver = winningTeam != null;
 
     if (gameOver) {
+      final allFourTens = winningTeam == 'teamA'
+          ? teamATens == 4
+          : teamBTens == 4;
+      _setVictory(updates, winningTeam, game, updates,
+          allFourTens: allFourTens);
       updates['status'] = GameStatus.completed.name;
       // Auto-confirm bots for next game
       for (final p in game.players) {
@@ -564,6 +565,7 @@ class GameService {
 
   Future<void> startNextGame(String gameId, String hostUid) async {
     final ref = _firestore.doc('games/$gameId');
+    Map<String, List<String>>? dealtHands;
 
     await _firestore.runTransaction((tx) async {
       final snap = await tx.get(ref);
@@ -628,7 +630,11 @@ class GameService {
         'previousTrumpTeam': game.trumpTeam,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      dealtHands = hands;
     });
+
+    lastDealtHands = dealtHands;
   }
 
   int _nextGameStarter(GameState game) {

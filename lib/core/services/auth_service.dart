@@ -57,6 +57,16 @@ class AuthService {
     await _auth.signOut();
   }
 
+  Future<UserCredential> signInAnonymously() async {
+    final result = await _auth.signInAnonymously();
+    final user = result.user!;
+    await _firestore.doc('users/${user.uid}').set({
+      'displayName': 'Debug Player',
+      'lastLoginAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return result;
+  }
+
   Future<void> _ensureGoogleInitialized() async {
     if (_googleInitialized) return;
     await GoogleSignIn.instance.initialize();
