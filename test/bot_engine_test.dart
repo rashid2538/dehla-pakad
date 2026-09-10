@@ -142,5 +142,118 @@ void main() {
       final card = PlayingCard.fromId(choice);
       expect(card.suit, isNot(Suit.spades));
     });
+
+    test('leads Ace to set up safe 10 extraction', () {
+      final state = _makeState();
+      final hand = ['AS', '10S', '5H', '7D'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.medium,
+      );
+      expect(choice, 'AS');
+    });
+  });
+
+  group('difficulty tiers', () {
+    test('hard bot conserves trump early when no ten at stake', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.hearts,
+        trumpSuit: Suit.clubs,
+        trickNumber: 2,
+        currentTrick: CurrentTrick(
+          leaderSeat: 2,
+          plays: [TrickPlay(2, PlayingCard.fromId('3H'))],
+        ),
+      );
+      final hand = ['3C', '5D'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+      );
+      expect(choice, '5D'); // sluffs instead of wasting trump
+    });
+
+    test('easy bot always trumps in', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.hearts,
+        trumpSuit: Suit.clubs,
+        trickNumber: 2,
+        currentTrick: CurrentTrick(
+          leaderSeat: 2,
+          plays: [TrickPlay(2, PlayingCard.fromId('3H'))],
+        ),
+      );
+      final hand = ['3C', '5D'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.easy,
+      );
+      expect(choice, '3C');
+    });
+
+    test('medium bot picks best suit for trump establishment', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.hearts,
+        currentTrick: CurrentTrick(
+          leaderSeat: 2,
+          plays: [TrickPlay(2, PlayingCard.fromId('3H'))],
+        ),
+      );
+      // Void in hearts, has 3 spades (inc 10) vs 1 diamond
+      final hand = ['3S', '5S', '10S', '7D'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.medium,
+      );
+      final card = PlayingCard.fromId(choice);
+      expect(card.suit, Suit.spades);
+      // Should play lowest non-10 of chosen suit
+      expect(choice, '3S');
+    });
+  });
+
+  group('BotMemory', () {
+    test('tracks void suits from off-suit plays', () {
+      final mem = BotMemory();
+      mem.recordPlay(
+        2,
+        const PlayingCard(Suit.clubs, Rank.five),
+        Suit.hearts,
+      );
+      expect(mem.knownVoidSuits[2], contains(Suit.hearts));
+    });
+
+    test('on-suit play does not add void', () {
+      final mem = BotMemory();
+      mem.recordPlay(
+        2,
+        const PlayingCard(Suit.hearts, Rank.five),
+        Suit.hearts,
+      );
+      expect(mem.knownVoidSuits[2], isEmpty);
+    });
+
+    test('reset clears all state', () {
+      final mem = BotMemory();
+      mem.recordPlay(
+        3,
+        const PlayingCard(Suit.spades, Rank.ace),
+        Suit.hearts,
+      );
+      mem.reset();
+      expect(mem.knownVoidSuits[3], isEmpty);
+      expect(mem.playHistory, isEmpty);
+    });
   });
 }

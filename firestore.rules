@@ -27,8 +27,10 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow create: if request.auth != null;
       allow update: if request.auth != null;
+      allow delete: if request.auth != null
+        && resource.data.hostId == request.auth.uid;
 
-      // Private hands — owner can read; host can read bot hands
+      // Private hands — owner can read; host can read bot hands; any authed user can write/delete
       match /privateHands/{handUid} {
         allow read: if request.auth != null && (
           request.auth.uid == handUid ||

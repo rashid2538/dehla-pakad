@@ -80,6 +80,8 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
               child: Stack(
                 children: [
                   if (isWinner) _ConfettiOverlay(),
+                  if (!isWinner && game.victoryType == VictoryType.poopy)
+                    _PoopOverlay(),
                   Padding(
                     padding: const EdgeInsets.all(24),
                     child: Column(
@@ -87,9 +89,11 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                       children: [
                         const Spacer(),
                         Text(
-                          game.victoryType == VictoryType.court
-                              ? '👑 Court Victory!'
-                              : '💥 Poopy Victory!',
+                          switch (game.victoryType) {
+                            VictoryType.court => '👑 Court Victory!',
+                            VictoryType.poopy => '💥 Poopy Victory!',
+                            _ => '🏆 Victory!',
+                          },
                           style: Theme.of(context).textTheme.headlineLarge,
                           textAlign: TextAlign.center,
                         )
@@ -163,7 +167,7 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                             ),
                             const SizedBox(width: 16),
                             ElevatedButton(
-                              onPressed: _confirmed ? null : _confirm,
+                              onPressed: _confirmed ? null : () => _confirm(game),
                               child: Text(
                                   _confirmed ? 'Waiting...' : 'Play Again'),
                             ),
@@ -308,12 +312,16 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
     );
   }
 
-  Future<void> _confirm() async {
+  int? _mySeat;
+
+  Future<void> _confirm(GameState game) async {
+    final seat = _mySeat ??= game.seatForUid(_uid)?.seat;
+    if (seat == null) return;
     setState(() => _confirmed = true);
     try {
       await ref
           .read(gameServiceProvider)
-          .confirmNextGame(widget.gameId, _uid);
+          .confirmNextGame(widget.gameId, _uid, seat: seat);
     } catch (e) {
       if (mounted) {
         setState(() => _confirmed = false);
@@ -334,6 +342,85 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
             .showSnackBar(SnackBar(content: Text('$e')));
       }
     }
+  }
+}
+
+class _PoopOverlay extends StatelessWidget {
+  final _rng = Random();
+
+  _PoopOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final poops = List.generate(18, (i) => (
+      x: _rng.nextDouble() * (size.width - 40),
+      y: _rng.nextDouble() * size.height * 0.6,
+      delay: _rng.nextInt(1200),
+      fs: 28.0 + _rng.nextInt(20),
+      slideDur: 2500 + _rng.nextInt(1500),
+    ));
+
+    return IgnorePointer(
+      child: SizedBox.expand(
+        child: Stack(
+          children: [
+            // Residue smudges — appear when poop unsticks, fade slowly
+            for (final p in poops)
+              Positioned(
+                left: p.x + p.fs * 0.15,
+                top: p.y + p.fs * 0.2,
+                child: Container(
+                  width: p.fs * 0.7,
+                  height: p.fs * 0.9,
+                  decoration: BoxDecoration(
+                    color: const Color(0x80654321),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(p.fs * 0.2),
+                      topRight: Radius.circular(p.fs * 0.25),
+                      bottomLeft: Radius.circular(p.fs * 0.35),
+                      bottomRight: Radius.circular(p.fs * 0.3),
+                    ),
+                  ),
+                )
+                    .animate()
+                    .fadeIn(
+                      delay: Duration(milliseconds: p.delay + 1500),
+                      duration: 200.ms,
+                    )
+                    .then(delay: 5000.ms)
+                    .fadeOut(duration: 3000.ms),
+              ),
+            // Poops: splat → stick → slide down
+            for (final p in poops)
+              Positioned(
+                left: p.x,
+                top: p.y,
+                child: Text('\u{1F4A9}', style: TextStyle(fontSize: p.fs))
+                    .animate()
+                    .scale(
+                      begin: const Offset(3, 3),
+                      end: const Offset(1, 1),
+                      duration: 300.ms,
+                      delay: Duration(milliseconds: p.delay),
+                      curve: Curves.bounceOut,
+                    )
+                    .fadeIn(
+                      duration: 100.ms,
+                      delay: Duration(milliseconds: p.delay),
+                    )
+                    .then(delay: 1200.ms)
+                    .moveY(
+                      begin: 0,
+                      end: size.height - p.y + 50,
+                      duration: Duration(milliseconds: p.slideDur),
+                      curve: Curves.easeIn,
+                    ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

@@ -1,25 +1,61 @@
-import 'dart:math';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/game_state.dart';
+import '../models/player.dart';
 import 'bot_engine.dart';
 import 'game_service.dart';
 
 class BotController {
   final GameService _gameService;
   final String gameId;
-  final _rng = Random();
+  final BotMemory _memory = BotMemory();
 
   GameState? _latestState;
   bool _processing = false;
   bool _disposed = false;
+  int _lastObservedTrick = 0;
+  int _lastObservedPlayCount = 0;
 
   BotController(this._gameService, this.gameId);
 
   void onGameStateChanged(GameState state) {
+    _updateMemory(state);
     _latestState = state;
     _maybeAct();
+  }
+
+  /// Track plays as they happen to build void-suit inference (§3.3).
+  void _updateMemory(GameState state) {
+    // New game — reset memory
+    if (state.trickNumber < _lastObservedTrick ||
+        (state.trickNumber == 1 && _lastObservedTrick > 1)) {
+      _memory.reset();
+      _lastObservedTrick = 0;
+      _lastObservedPlayCount = 0;
+    }
+
+    final trick = state.currentTrick;
+    if (trick == null) return;
+
+    // Trick number advanced — reset play counter for new trick
+    if (state.trickNumber > _lastObservedTrick) {
+      _lastObservedTrick = state.trickNumber;
+      _lastObservedPlayCount = 0;
+    }
+
+    // Record any new plays we haven't seen yet
+    final plays = trick.plays;
+    final leadSuit = plays.isNotEmpty ? plays.first.card.suit : null;
+    for (var i = _lastObservedPlayCount; i < plays.length; i++) {
+      final p = plays[i];
+      final alreadyRecorded =
+          _memory.allPlayedCardIds.contains(p.card.id);
+      if (!alreadyRecorded) {
+        _memory.recordPlay(p.seat, p.card, leadSuit);
+      }
+    }
+    _lastObservedPlayCount = plays.length;
   }
 
   Future<void> _maybeAct() async {
@@ -35,24 +71,47 @@ class BotController {
 
     _processing = true;
     try {
-      await Future.delayed(
-        Duration(milliseconds: 800 + _rng.nextInt(1000)),
-      );
       if (_disposed) return;
 
-      final hand = await _gameService.getBotHand(gameId, player.uid);
+      final freshState = _latestState;
+      if (freshState == null ||
+          freshState.status != GameStatus.inProgress) {
+        return;
+      }
+      final freshSeat = freshState.currentTurnSeat;
+      if (freshSeat == null) return;
+      final freshPlayer = freshState.seats[freshSeat];
+      if (freshPlayer == null || !freshPlayer.isBot) return;
+
+      final hand = await _gameService.getBotHand(gameId, freshPlayer.uid);
       if (hand.isEmpty || _disposed) return;
+
+      debugPrint(
+        'Bot ${freshPlayer.displayName} (seat $freshSeat, '
+        '${freshPlayer.botDifficulty?.name ?? "medium"}) '
+        'playing from ${hand.length} cards',
+      );
 
       final cardId = chooseBotCard(
         hand: hand,
-        gameState: state,
-        botSeat: seat,
+        gameState: freshState,
+        botSeat: freshSeat,
+        difficulty: freshPlayer.botDifficulty ?? BotDifficulty.medium,
+        memory: _memory,
       );
 
-      await _gameService.playCard(gameId, player.uid, seat, cardId);
-    } catch (e, st) {
+      debugPrint('Bot chose: $cardId');
+
+      await _gameService.playCard(
+        gameId,
+        freshPlayer.uid,
+        freshSeat,
+        cardId,
+      );
+    } on FirebaseException catch (e) {
+      debugPrint('BotController Firebase error: [${e.code}] ${e.message}');
+    } catch (e) {
       debugPrint('BotController ERROR: $e');
-      debugPrint('Stack: $st');
     } finally {
       _processing = false;
       if (!_disposed) _maybeAct();

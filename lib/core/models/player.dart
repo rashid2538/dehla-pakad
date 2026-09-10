@@ -1,3 +1,12 @@
+enum BotDifficulty {
+  easy,
+  medium,
+  hard;
+
+  static BotDifficulty fromString(String? s) =>
+      BotDifficulty.values.firstWhere((v) => v.name == s, orElse: () => medium);
+}
+
 class PlayerSeat {
   final String uid;
   final String displayName;
@@ -6,6 +15,7 @@ class PlayerSeat {
   final bool ready;
   final int seat;
   final bool isBot;
+  final BotDifficulty? botDifficulty;
 
   const PlayerSeat({
     required this.uid,
@@ -15,6 +25,7 @@ class PlayerSeat {
     this.ready = false,
     required this.seat,
     this.isBot = false,
+    this.botDifficulty,
   });
 
   PlayerSeat copyWith({
@@ -22,6 +33,7 @@ class PlayerSeat {
     String? photoUrl,
     bool? connected,
     bool? ready,
+    int? seat,
   }) =>
       PlayerSeat(
         uid: uid,
@@ -29,8 +41,9 @@ class PlayerSeat {
         photoUrl: photoUrl ?? this.photoUrl,
         connected: connected ?? this.connected,
         ready: ready ?? this.ready,
-        seat: seat,
+        seat: seat ?? this.seat,
         isBot: isBot,
+        botDifficulty: botDifficulty,
       );
 
   Map<String, dynamic> toMap() => {
@@ -41,6 +54,7 @@ class PlayerSeat {
         'ready': ready,
         'seat': seat,
         'isBot': isBot,
+        if (botDifficulty != null) 'botDifficulty': botDifficulty!.name,
       };
 
   factory PlayerSeat.fromMap(Map<String, dynamic> m, int seat) => PlayerSeat(
@@ -51,5 +65,8 @@ class PlayerSeat {
         ready: m['ready'] as bool? ?? false,
         seat: seat,
         isBot: m['isBot'] as bool? ?? false,
+        botDifficulty: m['isBot'] == true
+            ? BotDifficulty.fromString(m['botDifficulty'] as String?)
+            : null,
       );
 }

@@ -141,19 +141,11 @@ class GameService {
     });
   }
 
-  Future<void> toggleReady(String gameId, String uid) async {
-    final ref = _firestore.doc('games/$gameId');
-
-    await _firestore.runTransaction((tx) async {
-      final snap = await tx.get(ref);
-      final game = GameState.fromFirestore(snap.data()!, gameId);
-      final player = game.seatForUid(uid);
-      if (player == null) return;
-
-      tx.update(ref, {
-        'seats.${player.seat}.ready': !player.ready,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+  Future<void> toggleReady(String gameId, String uid,
+      {required int seat, required bool currentlyReady}) async {
+    await _firestore.doc('games/$gameId').update({
+      'seats.$seat.ready': !currentlyReady,
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
@@ -162,7 +154,8 @@ class GameService {
     await _firestore.runTransaction((tx) async {
       final snap = await tx.get(ref);
       final game = GameState.fromFirestore(snap.data()!, gameId);
-      if (game.hostId != hostUid || game.status != GameStatus.lobby) return;
+      if (game.hostId != hostUid) return;
+      if (game.status != GameStatus.lobby && game.status != GameStatus.completed) return;
       tx.update(ref, {
         'seats.$seat': null,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -170,36 +163,49 @@ class GameService {
     });
   }
 
-  // ── Bot Management ──
-
-  Future<void> addBot(String gameId, String hostUid) async {
+  Future<void> swapSeats(String gameId, String hostUid, int seat1, int seat2) async {
     final ref = _firestore.doc('games/$gameId');
-
     await _firestore.runTransaction((tx) async {
       final snap = await tx.get(ref);
       final game = GameState.fromFirestore(snap.data()!, gameId);
+      if (game.hostId != hostUid) return;
+      if (game.status != GameStatus.lobby) return;
 
-      if (game.hostId != hostUid) throw Exception('Not the host');
-      if (game.status != GameStatus.lobby) throw Exception('Game not in lobby');
-      if (game.playerCount >= 4) throw Exception('Room is full');
-
-      final openSeat =
-          [1, 2, 3, 4].firstWhere((s) => game.seats[s] == null);
-      final usedNames = game.players.map((p) => p.displayName).toSet();
-      final botName = pickBotName(usedNames);
-      final botUid = 'bot_${_uuid.v4()}';
+      final p1 = game.seats[seat1];
+      final p2 = game.seats[seat2];
+      if (p1 == null && p2 == null) return;
 
       tx.update(ref, {
-        'seats.$openSeat': PlayerSeat(
-          uid: botUid,
-          displayName: botName,
-          seat: openSeat,
-          isBot: true,
-          ready: true,
-          connected: true,
-        ).toMap(),
+        'seats.$seat1': p2?.copyWith(seat: seat1).toMap(),
+        'seats.$seat2': p1?.copyWith(seat: seat2).toMap(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+    });
+  }
+
+  // ── Bot Management ──
+
+  Future<void> addBot(
+    String gameId,
+    String hostUid, {
+    required int seat,
+    required Set<String> usedNames,
+    BotDifficulty difficulty = BotDifficulty.medium,
+  }) async {
+    final botName = pickBotName(usedNames);
+    final botUid = 'bot_${_uuid.v4()}';
+
+    await _firestore.doc('games/$gameId').update({
+      'seats.$seat': PlayerSeat(
+        uid: botUid,
+        displayName: botName,
+        seat: seat,
+        isBot: true,
+        ready: true,
+        connected: true,
+        botDifficulty: difficulty,
+      ).toMap(),
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
@@ -346,12 +352,11 @@ class GameService {
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
-      // Add play
+      // Build play list
       final newPlays = [
         ...trick.plays.map((p) => p.toMap()),
         TrickPlay(seat, card, DateTime.now()).toMap(),
       ];
-      updates['currentTrick.plays'] = newPlays;
 
       // Set lead suit on first play
       if (isFirstPlay) {
@@ -367,20 +372,35 @@ class GameService {
 
       final playCount = trick.plays.length + 1;
 
+      updates['currentTrick.plays'] = newPlays;
       if (playCount == 4) {
-        // Resolve trick
-        _resolveTrick(
-          game,
-          newPlays,
-          card,
-          seat,
-          updates,
-        );
+        // Mark trick as pending resolution (null turn = no one can play)
+        updates['currentTurnSeat'] = null;
       } else {
         updates['currentTurnSeat'] = GameState.nextSeat(seat);
       }
 
       tx.update(gameRef, updates);
+    });
+  }
+
+  Future<void> resolveTrick(String gameId) async {
+    final ref = _firestore.doc('games/$gameId');
+    await _firestore.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      final game = GameState.fromFirestore(snap.data()!, gameId);
+      if (game.status != GameStatus.inProgress) return;
+      final trick = game.currentTrick;
+      if (trick == null || trick.plays.length != 4) return;
+      // Already resolved (currentTurnSeat set by another client)
+      if (game.currentTurnSeat != null) return;
+
+      final updates = <String, dynamic>{
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      _resolveTrick(game, trick.plays.map((p) => p.toMap()).toList(),
+          trick.plays.last.card, trick.plays.last.seat, updates);
+      tx.update(ref, updates);
     });
   }
 
@@ -445,19 +465,28 @@ class GameService {
     bool gameOver = false;
 
     if (teamATens == 4) {
-      _setVictory(updates, 'teamA', game, updates);
+      _setVictory(updates, 'teamA', game, updates, allFourTens: true);
       gameOver = true;
     } else if (teamBTens == 4) {
+      _setVictory(updates, 'teamB', game, updates, allFourTens: true);
+      gameOver = true;
+    } else if (teamATens >= 3) {
+      _setVictory(updates, 'teamA', game, updates);
+      gameOver = true;
+    } else if (teamBTens >= 3) {
       _setVictory(updates, 'teamB', game, updates);
       gameOver = true;
+    } else if (teamATens == 2 && teamBTens == 2 &&
+               (newTrickCountA >= 7 || newTrickCountB >= 7)) {
+      final winner = newTrickCountA >= 7 ? 'teamA' : 'teamB';
+      _setVictory(updates, winner, game, updates);
+      gameOver = true;
     } else if (game.trickNumber >= 13) {
-      // No team got all 4 — tiebreak: most tens, then most tricks
       if (teamATens > teamBTens) {
         _setVictory(updates, 'teamA', game, updates);
       } else if (teamBTens > teamATens) {
         _setVictory(updates, 'teamB', game, updates);
       } else {
-        // 2-2 tens split → team with more tricks
         if (newTrickCountA > newTrickCountB) {
           _setVictory(updates, 'teamA', game, updates);
         } else {
@@ -486,14 +515,20 @@ class GameService {
     Map<String, dynamic> updates,
     String winnerTeam,
     GameState game,
-    Map<String, dynamic> allUpdates,
-  ) {
-    final trumpTeam = allUpdates['trumpTeam'] as String? ?? game.trumpTeam;
+    Map<String, dynamic> allUpdates, {
+    bool allFourTens = false,
+  }) {
     updates['winningTeam'] = winnerTeam;
-    updates['victoryType'] =
-        (trumpTeam == null || trumpTeam != winnerTeam)
-            ? VictoryType.poopy.name
-            : VictoryType.court.name;
+    if (!allFourTens) {
+      // 3-1 tens or 2-2 with more tricks → normal victory
+      updates['victoryType'] = VictoryType.victory.name;
+    } else {
+      // All 4 tens: court if trump-setter's team, poopy otherwise
+      final trumpTeam = allUpdates['trumpTeam'] as String? ?? game.trumpTeam;
+      updates['victoryType'] = (trumpTeam != null && trumpTeam == winnerTeam)
+          ? VictoryType.court.name
+          : VictoryType.poopy.name;
+    }
   }
 
   TrickPlay _findTrickWinner(
@@ -519,17 +554,11 @@ class GameService {
 
   // ── Next Game ──
 
-  Future<void> confirmNextGame(String gameId, String uid) async {
-    final ref = _firestore.doc('games/$gameId');
-    await _firestore.runTransaction((tx) async {
-      final snap = await tx.get(ref);
-      final game = GameState.fromFirestore(snap.data()!, gameId);
-      final player = game.seatForUid(uid);
-      if (player == null) return;
-      tx.update(ref, {
-        'seats.${player.seat}.ready': true,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+  Future<void> confirmNextGame(String gameId, String uid,
+      {required int seat}) async {
+    await _firestore.doc('games/$gameId').update({
+      'seats.$seat.ready': true,
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
@@ -620,6 +649,85 @@ class GameService {
       }
       return next;
     }
+  }
+
+  // ── Room Management ──
+
+  Stream<List<GameState>> myRoomsStream(String uid) => _firestore
+      .collection('games')
+      .where('hostId', isEqualTo: uid)
+      .orderBy('updatedAt', descending: true)
+      .limit(20)
+      .snapshots()
+      .map((snap) => snap.docs
+          .map((d) => GameState.fromFirestore(d.data(), d.id))
+          .where((g) => g.status != GameStatus.abandoned)
+          .toList());
+
+  Future<void> deleteRoom(String gameId, String hostUid) async {
+    final ref = _firestore.doc('games/$gameId');
+    final snap = await ref.get();
+    if (!snap.exists) return;
+    final game = GameState.fromFirestore(snap.data()!, gameId);
+    if (game.hostId != hostUid) throw Exception('Not the host');
+
+    // Delete known player hands, then the game doc
+    final batch = _firestore.batch();
+    for (final p in game.players) {
+      batch.delete(_firestore.doc('games/$gameId/privateHands/${p.uid}'));
+    }
+    batch.delete(ref);
+    await batch.commit();
+  }
+
+  Future<void> renameRoom(String gameId, String hostUid, String newCode) async {
+    final ref = _firestore.doc('games/$gameId');
+    await _firestore.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      final game = GameState.fromFirestore(snap.data()!, gameId);
+      if (game.hostId != hostUid) throw Exception('Not the host');
+      tx.update(ref, {
+        'roomCode': newCode.toUpperCase(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> resetToLobby(String gameId, String hostUid) async {
+    final ref = _firestore.doc('games/$gameId');
+    await _firestore.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      final game = GameState.fromFirestore(snap.data()!, gameId);
+      if (game.hostId != hostUid) throw Exception('Not the host');
+
+      final seatUpdates = <String, dynamic>{};
+      for (final p in game.players) {
+        seatUpdates['seats.${p.seat}.ready'] = false;
+      }
+
+      tx.update(ref, {
+        ...seatUpdates,
+        'status': GameStatus.lobby.name,
+        'startingPlayerSeat': null,
+        'currentTurnSeat': null,
+        'leadSuit': null,
+        'trumpSuit': null,
+        'trumpTeam': null,
+        'trumpSetterSeat': null,
+        'trickNumber': 1,
+        'currentTrick': null,
+        'collectedTens': const CollectedTens().toMap(),
+        'trickPileA': const TrickPile().toMap(),
+        'trickPileB': const TrickPile().toMap(),
+        'winningTeam': null,
+        'victoryType': null,
+        'previousTrumpSetterSeat': null,
+        'previousVictoryType': null,
+        'previousWinningTeam': null,
+        'previousTrumpTeam': null,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
   }
 
   // ── Utils ──

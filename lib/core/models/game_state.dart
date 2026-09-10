@@ -16,11 +16,13 @@ enum GameStatus {
 }
 
 enum VictoryType {
+  victory,
   court,
   poopy;
 
   static VictoryType? fromString(String? s) =>
-      s == null ? null : VictoryType.values.firstWhere((v) => v.name == s);
+      s == null ? null : VictoryType.values.firstWhere((v) => v.name == s,
+          orElse: () => victory);
 }
 
 class TrickPlay {

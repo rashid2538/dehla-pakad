@@ -23,6 +23,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
   late final String _uid;
   late final Stream<GameState> _gameStream;
   GameState? _prevGame;
+  int? _selectedSwapSeat;
 
   @override
   void initState() {
@@ -48,6 +49,62 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
       AudioService.instance.play(GameSound.gameStart);
       HapticService.medium();
     }
+  }
+
+  void _showBotDifficultyPicker(GameState game) {
+    final openSeat = [1, 2, 3, 4].cast<int?>().firstWhere(
+          (s) => game.seats[s!] == null,
+          orElse: () => null,
+        );
+    if (openSeat == null) return;
+    final usedNames = game.players.map((p) => p.displayName).toSet();
+
+    showModalBottomSheet<BotDifficulty>(
+      context: context,
+      backgroundColor: AppColors.maroonDeep,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Bot Difficulty',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
+            for (final d in BotDifficulty.values)
+              ListTile(
+                leading: Icon(
+                  d == BotDifficulty.easy
+                      ? Icons.sentiment_satisfied
+                      : d == BotDifficulty.medium
+                          ? Icons.psychology
+                          : Icons.local_fire_department,
+                  color: AppColors.gold,
+                ),
+                title: Text(d.name[0].toUpperCase() + d.name.substring(1)),
+                subtitle: Text(
+                  d == BotDifficulty.easy
+                      ? 'Plays randomly, friendly for beginners'
+                      : d == BotDifficulty.medium
+                          ? 'Solid strategy, avoids blunders'
+                          : 'Tracks voids, conserves trump',
+                ),
+                onTap: () => Navigator.pop(ctx, d),
+              ),
+          ],
+        ),
+      ),
+    ).then((difficulty) {
+      if (difficulty != null) {
+        ref.read(gameServiceProvider).addBot(
+              widget.gameId,
+              _uid,
+              seat: openSeat,
+              usedNames: usedNames,
+              difficulty: difficulty,
+            );
+      }
+    });
   }
 
   void _showNameEditDialog(GameState game) {
@@ -146,6 +203,44 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        icon: const Icon(Icons.arrow_back, color: AppColors.gold),
+                        onPressed: () async {
+                          final leave = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: AppColors.maroonDark,
+                              title: const Text('Leave Room?',
+                                  style: TextStyle(color: AppColors.gold)),
+                              content: const Text(
+                                'You will be removed from this room.',
+                                style: TextStyle(color: AppColors.ivory),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Stay',
+                                      style: TextStyle(color: AppColors.silver)),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('Leave',
+                                      style: TextStyle(color: AppColors.error)),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (leave == true && context.mounted) {
+                            await ref
+                                .read(gameServiceProvider)
+                                .leaveRoom(widget.gameId, _uid);
+                            if (context.mounted) context.go('/');
+                          }
+                        },
+                      ),
+                    ),
                     _RoomCodeBar(roomCode: game.roomCode),
                     const SizedBox(height: 8),
                     Text(
@@ -157,10 +252,23 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                       game: game,
                       currentUid: _uid,
                       isHost: isHost,
+                      selectedSwapSeat: _selectedSwapSeat,
                       onKick: (seat) => ref
                           .read(gameServiceProvider)
                           .kickPlayer(widget.gameId, _uid, seat),
                       onNameEdit: () => _showNameEditDialog(game),
+                      onSeatTap: !isHost ? null : (seat) {
+                        if (_selectedSwapSeat == null) {
+                          setState(() => _selectedSwapSeat = seat);
+                        } else if (_selectedSwapSeat == seat) {
+                          setState(() => _selectedSwapSeat = null);
+                        } else {
+                          ref.read(gameServiceProvider).swapSeats(
+                            widget.gameId, _uid, _selectedSwapSeat!, seat,
+                          );
+                          setState(() => _selectedSwapSeat = null);
+                        }
+                      },
                     ),
                     const Spacer(),
                     _BottomControls(
@@ -170,7 +278,9 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                       myPlayer: myPlayer,
                       onReady: () => ref
                           .read(gameServiceProvider)
-                          .toggleReady(widget.gameId, _uid),
+                          .toggleReady(widget.gameId, _uid,
+                              seat: myPlayer!.seat,
+                              currentlyReady: myPlayer.ready),
                       onStart: () => ref
                           .read(gameServiceProvider)
                           .startGame(widget.gameId, _uid),
@@ -182,9 +292,7 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                       },
                       onInviteFriends: () =>
                           context.push('/friends?gameId=${widget.gameId}'),
-                      onAddBot: () => ref
-                          .read(gameServiceProvider)
-                          .addBot(widget.gameId, _uid),
+                      onAddBot: () => _showBotDifficultyPicker(game),
                     ),
                   ],
                 ),
@@ -237,15 +345,19 @@ class _SeatTable extends StatelessWidget {
   final GameState game;
   final String currentUid;
   final bool isHost;
+  final int? selectedSwapSeat;
   final void Function(int seat) onKick;
   final VoidCallback onNameEdit;
+  final void Function(int seat)? onSeatTap;
 
   const _SeatTable({
     required this.game,
     required this.currentUid,
     required this.isHost,
+    this.selectedSwapSeat,
     required this.onKick,
     required this.onNameEdit,
+    this.onSeatTap,
   });
 
   @override
@@ -279,82 +391,31 @@ class _SeatTable extends StatelessWidget {
               ),
             ),
           ),
-          // Seat 1 — North (top center)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: _SeatCard(
-                player: game.seats[1],
-                seatNum: 1,
-                label: seatLabels[1]!,
-                team: 'teamA',
-                isMe: game.seats[1]?.uid == currentUid,
-                isHost: isHost,
-                canKick: isHost && game.seats[1]?.uid != currentUid,
-                onKick: () => onKick(1),
-                onNameEdit: onNameEdit,
+          for (final entry in {
+            1: (Alignment.topCenter, const EdgeInsets.only(top: 0)),
+            2: (Alignment.centerRight, const EdgeInsets.only(right: 0)),
+            3: (Alignment.bottomCenter, const EdgeInsets.only(bottom: 0)),
+            4: (Alignment.centerLeft, const EdgeInsets.only(left: 0)),
+          }.entries)
+            Positioned.fill(
+              child: Align(
+                alignment: entry.value.$1,
+                child: _SeatCard(
+                  player: game.seats[entry.key],
+                  seatNum: entry.key,
+                  label: seatLabels[entry.key]!,
+                  team: GameState.teamForSeat(entry.key),
+                  isMe: game.seats[entry.key]?.uid == currentUid,
+                  isHost: isHost,
+                  canKick: isHost && game.seats[entry.key]?.uid != currentUid,
+                  isSwapSelected: selectedSwapSeat == entry.key,
+                  isSwapTarget: selectedSwapSeat != null && selectedSwapSeat != entry.key,
+                  onKick: () => onKick(entry.key),
+                  onNameEdit: onNameEdit,
+                  onSwapTap: onSeatTap != null ? () => onSeatTap!(entry.key) : null,
+                ),
               ),
             ),
-          ),
-          // Seat 2 — East (right center)
-          Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            child: Center(
-              child: _SeatCard(
-                player: game.seats[2],
-                seatNum: 2,
-                label: seatLabels[2]!,
-                team: 'teamB',
-                isMe: game.seats[2]?.uid == currentUid,
-                isHost: isHost,
-                canKick: isHost && game.seats[2]?.uid != currentUid,
-                onKick: () => onKick(2),
-                onNameEdit: onNameEdit,
-              ),
-            ),
-          ),
-          // Seat 3 — South (bottom center)
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: _SeatCard(
-                player: game.seats[3],
-                seatNum: 3,
-                label: seatLabels[3]!,
-                team: 'teamA',
-                isMe: game.seats[3]?.uid == currentUid,
-                isHost: isHost,
-                canKick: isHost && game.seats[3]?.uid != currentUid,
-                onKick: () => onKick(3),
-                onNameEdit: onNameEdit,
-              ),
-            ),
-          ),
-          // Seat 4 — West (left center)
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            child: Center(
-              child: _SeatCard(
-                player: game.seats[4],
-                seatNum: 4,
-                label: seatLabels[4]!,
-                team: 'teamB',
-                isMe: game.seats[4]?.uid == currentUid,
-                isHost: isHost,
-                canKick: isHost && game.seats[4]?.uid != currentUid,
-                onKick: () => onKick(4),
-                onNameEdit: onNameEdit,
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -369,8 +430,11 @@ class _SeatCard extends StatelessWidget {
   final bool isMe;
   final bool isHost;
   final bool canKick;
+  final bool isSwapSelected;
+  final bool isSwapTarget;
   final VoidCallback onKick;
   final VoidCallback onNameEdit;
+  final VoidCallback? onSwapTap;
 
   const _SeatCard({
     required this.player,
@@ -380,8 +444,11 @@ class _SeatCard extends StatelessWidget {
     required this.isMe,
     required this.isHost,
     required this.canKick,
+    this.isSwapSelected = false,
+    this.isSwapTarget = false,
     required this.onKick,
     required this.onNameEdit,
+    this.onSwapTap,
   });
 
   @override
@@ -389,21 +456,30 @@ class _SeatCard extends StatelessWidget {
     final teamColor = team == 'teamA' ? AppColors.gold : AppColors.silver;
     final isEmpty = player == null;
 
-    return Container(
+    return GestureDetector(
+      onTap: onSwapTap,
+      child: AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
       width: 90,
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
       decoration: BoxDecoration(
-        color: isEmpty
-            ? AppColors.maroonDark.withValues(alpha: 0.6)
-            : AppColors.maroonDark,
+        color: isSwapSelected
+            ? AppColors.gold.withValues(alpha: 0.2)
+            : isEmpty
+                ? AppColors.maroonDark.withValues(alpha: 0.6)
+                : AppColors.maroonDark,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isMe
+          color: isSwapSelected
               ? AppColors.gold
-              : isEmpty
-                  ? AppColors.burgundy.withValues(alpha: 0.5)
-                  : teamColor.withValues(alpha: 0.6),
-          width: isMe ? 2 : 1,
+              : isSwapTarget
+                  ? AppColors.gold.withValues(alpha: 0.5)
+                  : isMe
+                      ? AppColors.gold
+                      : isEmpty
+                          ? AppColors.burgundy.withValues(alpha: 0.5)
+                          : teamColor.withValues(alpha: 0.6),
+          width: isSwapSelected || isMe ? 2 : 1,
         ),
       ),
       child: Column(
@@ -466,6 +542,15 @@ class _SeatCard extends StatelessWidget {
                 ],
               ),
             ),
+            if (player!.isBot && player!.botDifficulty != null)
+              Text(
+                player!.botDifficulty!.name.toUpperCase(),
+                style: TextStyle(
+                  color: teamColor.withValues(alpha: 0.6),
+                  fontSize: 8,
+                  letterSpacing: 1,
+                ),
+              ),
             if (canKick && player != null)
               GestureDetector(
                 onTap: onKick,
@@ -473,9 +558,11 @@ class _SeatCard extends StatelessWidget {
                     color: AppColors.error, size: 14),
               ),
           ],
+          if (isSwapSelected)
+            const Icon(Icons.swap_horiz, color: AppColors.gold, size: 16),
         ],
       ),
-    );
+    ));
   }
 }
 

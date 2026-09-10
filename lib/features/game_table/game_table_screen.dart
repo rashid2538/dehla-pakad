@@ -37,7 +37,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   bool _showTenCollected = false;
   String? _collectedTenId;
   String? _collectedTenTeam;
-  List<TrickPlay>? _previousTrickPlays;
+  List<TrickPlay>? _lastTrickPlays;
+  String? _lastTrickWinnerName;
 
   @override
   void initState() {
@@ -102,6 +103,16 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     _prevGame = game;
     if (prev == null) return;
 
+    // New round started — clear all stale overlay state
+    if (prev.status == GameStatus.completed &&
+        game.status == GameStatus.inProgress) {
+      _lastTrickPlays = null;
+      _lastTrickWinnerName = null;
+      _showTrickWin = false;
+      _showTenCollected = false;
+      _showTrumpBanner = false;
+    }
+
     final myTeam = GameState.teamForSeat(mySeat);
 
     // Remote card played (local plays are handled in _playCard)
@@ -112,6 +123,14 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       if (lastPlay.seat != mySeat) {
         AudioService.instance.play(GameSound.cardPlay, volume: 0.4);
       }
+    }
+
+    // 4th card played — let animation run, then resolve
+    if (nextPlays == 4 && prevPlays < 4 && game.currentTurnSeat == null) {
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (!mounted) return;
+        ref.read(gameServiceProvider).resolveTrick(widget.gameId);
+      });
     }
 
     // My turn started
@@ -130,9 +149,13 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       });
     }
 
-    // Trick completed — keep previous plays visible until new trick starts
-    if (game.trickNumber > prev.trickNumber && prev.trickNumber > 0) {
-      _previousTrickPlays = prev.currentTrick?.plays;
+    // Trick resolved — trickNumber incremented, winner is currentTurnSeat
+    if (game.trickNumber > prev.trickNumber &&
+        prev.trickNumber > 0 &&
+        game.currentTurnSeat != null) {
+      _lastTrickPlays = prev.currentTrick?.plays;
+      _lastTrickWinnerName =
+          game.seats[game.currentTurnSeat]?.displayName ?? '?';
       final winnerTeam = GameState.teamForSeat(game.currentTurnSeat!);
       _trickWinnerSeat = game.currentTurnSeat;
       if (winnerTeam == myTeam) {
@@ -145,12 +168,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       Future.delayed(const Duration(milliseconds: 800), () {
         if (mounted) setState(() => _showTrickWin = false);
       });
-    }
-
-    // Clear previous trick cards when new trick's first card is played
-    if (_previousTrickPlays != null &&
-        (game.currentTrick?.plays.isNotEmpty == true)) {
-      _previousTrickPlays = null;
     }
 
     // Ten collected
@@ -258,6 +275,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                         Column(
                           children: [
                             _buildTopBar(game),
+                            if (_lastTrickPlays != null)
+                              _buildLastTrickBar(),
                             Expanded(
                               child: _buildTable(
                                 game,
@@ -609,6 +628,51 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     );
   }
 
+  Widget _buildLastTrickBar() {
+    final plays = _lastTrickPlays!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      color: AppColors.maroonDark.withValues(alpha: 0.5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            'Last: ',
+            style: TextStyle(color: AppColors.silver, fontSize: 11),
+          ),
+          for (final p in plays)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Text(
+                '${p.card.rank.symbol}${p.card.suit.symbol}',
+                style: TextStyle(
+                  color: p.seat == _trickWinnerSeat
+                      ? (p.card.suit == Suit.hearts ||
+                              p.card.suit == Suit.diamonds)
+                          ? AppColors.suitRed
+                          : AppColors.ivory
+                      : AppColors.silver,
+                  fontSize: 12,
+                  fontWeight: p.seat == _trickWinnerSeat
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+                ),
+              ),
+            ),
+          const SizedBox(width: 6),
+          Text(
+            '→ $_lastTrickWinnerName',
+            style: const TextStyle(
+              color: AppColors.gold,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTable(
     GameState game,
     int mySeat,
@@ -769,14 +833,19 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     final trick = game.currentTrick;
     if (trick == null) return const SizedBox.shrink();
 
-    final plays = trick.plays.isEmpty && _previousTrickPlays != null
-        ? _previousTrickPlays!
-        : trick.plays;
+    final plays = trick.plays;
     final positions = <int, Offset>{
       mySeat: Offset(0, cardW * 0.8),
       _relativeSeat(mySeat, 1): Offset(cardW * 0.9, 0),
       _relativeSeat(mySeat, 2): Offset(0, -cardW * 0.8),
       _relativeSeat(mySeat, 3): Offset(-cardW * 0.9, 0),
+    };
+    // Cards fly in from 3x the final offset (player's edge direction)
+    final flyFrom = <int, Offset>{
+      mySeat: Offset(0, cardW * 2.5),
+      _relativeSeat(mySeat, 1): Offset(cardW * 2.5, 0),
+      _relativeSeat(mySeat, 2): Offset(0, -cardW * 2.5),
+      _relativeSeat(mySeat, 3): Offset(-cardW * 2.5, 0),
     };
 
     return SizedBox(
@@ -796,24 +865,51 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                   color: AppColors.gold.withValues(alpha: 0.15),
                 ),
               ),
+              child: game.leadSuit != null && trick.plays.isNotEmpty
+                  ? Center(
+                      child: Text(
+                        game.leadSuit!.symbol,
+                        style: TextStyle(
+                          fontSize: cardW * 0.5,
+                          color: (game.leadSuit == Suit.hearts ||
+                                  game.leadSuit == Suit.diamonds)
+                              ? AppColors.suitRed.withValues(alpha: 0.3)
+                              : AppColors.ivory.withValues(alpha: 0.2),
+                        ),
+                      ),
+                    )
+                  : null,
             ),
           ),
           for (var i = 0; i < plays.length; i++)
-            Center(
-              child: Transform.translate(
-                offset: positions[plays[i].seat] ?? Offset.zero,
-                child:
-                    PlayingCardWidget(card: plays[i].card, width: cardW * 0.85)
-                        .animate()
-                        .fadeIn(duration: 200.ms)
-                        .scale(
-                          begin: const Offset(0.6, 0.6),
-                          end: const Offset(1, 1),
-                          duration: 250.ms,
-                          curve: Curves.easeOutBack,
-                        ),
-              ),
-            ),
+            () {
+              final seat = plays[i].seat;
+              final from = flyFrom[seat] ?? Offset.zero;
+              final to = positions[seat] ?? Offset.zero;
+              final dx = from.dx - to.dx;
+              final dy = from.dy - to.dy;
+              return Center(
+                child: Transform.translate(
+                  offset: to,
+                  child: PlayingCardWidget(
+                          card: plays[i].card, width: cardW * 0.85)
+                      .animate()
+                      .moveX(
+                        begin: dx,
+                        end: 0,
+                        duration: 300.ms,
+                        curve: Curves.easeOutCubic,
+                      )
+                      .moveY(
+                        begin: dy,
+                        end: 0,
+                        duration: 300.ms,
+                        curve: Curves.easeOutCubic,
+                      )
+                      .fadeIn(duration: 150.ms),
+                ),
+              );
+            }(),
         ],
       ),
     );
