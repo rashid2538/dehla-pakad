@@ -31,7 +31,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   late final Stream<List<String>> _handStream;
   bool _playing = false;
   bool _resolvingTrick = false;
-  String? _selectedCardId;
   BotController? _botController;
   Timer? _trickWatchTimer;
   GameState? _lastGame;
@@ -87,12 +86,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
 
   void _onCardTap(int mySeat, String cardId) {
     if (_playing) return;
-    if (_selectedCardId == cardId) {
-      _showPlayConfirmation(mySeat, cardId);
-    } else {
-      setState(() => _selectedCardId = cardId);
-      HapticService.selection();
-    }
+    _showPlayConfirmation(mySeat, cardId);
   }
 
   void _showPlayConfirmation(int mySeat, String cardId) {
@@ -134,10 +128,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              setState(() => _selectedCardId = null);
-            },
+            onPressed: () => Navigator.of(ctx).pop(),
             child: const Text(
               'Cancel',
               style: TextStyle(color: AppColors.silver, fontSize: 14),
@@ -210,10 +201,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       _showTrickWin = false;
       _showTenCollected = false;
       _showTrumpBanner = false;
-    }
-
-    if (game.currentTurnSeat != prev.currentTurnSeat) {
-      _selectedCardId = null;
     }
 
     final myTeam = GameState.teamForSeat(mySeat);
@@ -1119,8 +1106,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                       sorted[i],
                       cardW,
                       isLegal: isMyTurn && legalCards.contains(sorted[i].id),
-                      isMyTurn: isMyTurn,
-                      isSelected: _selectedCardId == sorted[i].id,
                       onTap: () => _onCardTap(mySeat, sorted[i].id),
                     ),
                   ),
@@ -1136,36 +1121,17 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     PlayingCard card,
     double width, {
     required bool isLegal,
-    required bool isMyTurn,
-    required bool isSelected,
     required VoidCallback onTap,
   }) {
     return Transform.translate(
-      offset: Offset(0, isSelected ? -24 : isLegal ? -12 : 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (isSelected)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                'Tap to play',
-                style: TextStyle(
-                  color: AppColors.gold,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          PlayingCardWidget(
-            key: ValueKey(card.id),
-            card: card,
-            width: width,
-            enabled: isLegal,
-            highlighted: isLegal,
-            onTap: onTap,
-          ),
-        ],
+      offset: Offset(0, isLegal ? -12 : 0),
+      child: PlayingCardWidget(
+        key: ValueKey(card.id),
+        card: card,
+        width: width,
+        enabled: isLegal,
+        highlighted: isLegal,
+        onTap: onTap,
       ),
     );
   }
