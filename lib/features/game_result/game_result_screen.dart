@@ -89,11 +89,15 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                       children: [
                         const Spacer(),
                         Text(
-                          switch (game.victoryType) {
-                            VictoryType.court => '👑 Court Victory!',
-                            VictoryType.poopy => '💥 Poopy Victory!',
-                            _ => '🏆 Victory!',
-                          },
+                          isWinner
+                              ? switch (game.victoryType) {
+                                  VictoryType.court => '👑 Court Victory!',
+                                  VictoryType.poopy => '💥 Poopy Victory!',
+                                  _ => '🏆 Victory!',
+                                }
+                              : game.victoryType == VictoryType.poopy
+                                  ? '💩 Poopy Defeat!'
+                                  : '😞 Defeat!',
                           style: Theme.of(context).textTheme.headlineLarge,
                           textAlign: TextAlign.center,
                         )
