@@ -79,10 +79,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
 
   Future<void> _playCard(int mySeat, String cardId) async {
     if (_playing) return;
-    setState(() {
-      _playing = true;
-      _selectedCardId = null;
-    });
+    setState(() => _playing = true);
     AudioService.instance.play(GameSound.cardPlay);
     HapticService.selection();
     try {
