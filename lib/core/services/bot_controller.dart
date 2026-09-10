@@ -14,6 +14,7 @@ class BotController {
   GameState? _latestState;
   bool _processing = false;
   bool _disposed = false;
+  bool _stateChangedWhileProcessing = false;
   int _lastObservedTrick = 0;
   int _lastObservedPlayCount = 0;
 
@@ -22,7 +23,11 @@ class BotController {
   void onGameStateChanged(GameState state) {
     _updateMemory(state);
     _latestState = state;
-    _maybeAct();
+    if (_processing) {
+      _stateChangedWhileProcessing = true;
+    } else {
+      _maybeAct();
+    }
   }
 
   /// Track plays as they happen to build void-suit inference (§3.3).
@@ -114,7 +119,10 @@ class BotController {
       debugPrint('BotController ERROR: $e');
     } finally {
       _processing = false;
-      if (!_disposed) _maybeAct();
+      if (!_disposed && _stateChangedWhileProcessing) {
+        _stateChangedWhileProcessing = false;
+        _maybeAct();
+      }
     }
   }
 
