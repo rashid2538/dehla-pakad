@@ -28,6 +28,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   late final Stream<GameState> _gameStream;
   late final Stream<List<String>> _handStream;
   bool _playing = false;
+  String? _selectedCardId;
   BotController? _botController;
 
   GameState? _prevGame;
@@ -66,9 +67,22 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
 
   int _relativeSeat(int mySeat, int offset) => ((mySeat - 1 + offset) % 4) + 1;
 
+  void _onCardTap(int mySeat, String cardId) {
+    if (_playing) return;
+    if (_selectedCardId == cardId) {
+      _playCard(mySeat, cardId);
+    } else {
+      setState(() => _selectedCardId = cardId);
+      HapticService.selection();
+    }
+  }
+
   Future<void> _playCard(int mySeat, String cardId) async {
     if (_playing) return;
-    setState(() => _playing = true);
+    setState(() {
+      _playing = true;
+      _selectedCardId = null;
+    });
     AudioService.instance.play(GameSound.cardPlay);
     HapticService.selection();
     try {
@@ -98,6 +112,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       );
     }
     _botController?.onGameStateChanged(game);
+    _selectedCardId = null;
 
     final prev = _prevGame;
     _prevGame = game;
@@ -977,7 +992,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                       cardW,
                       isLegal: isMyTurn && legalCards.contains(sorted[i].id),
                       isMyTurn: isMyTurn,
-                      onTap: () => _playCard(mySeat, sorted[i].id),
+                      isSelected: _selectedCardId == sorted[i].id,
+                      onTap: () => _onCardTap(mySeat, sorted[i].id),
                     ),
                   ),
               ],
@@ -993,17 +1009,35 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     double width, {
     required bool isLegal,
     required bool isMyTurn,
+    required bool isSelected,
     required VoidCallback onTap,
   }) {
     return Transform.translate(
-      offset: Offset(0, isLegal ? -12 : 0),
-      child: PlayingCardWidget(
-        key: ValueKey(card.id),
-        card: card,
-        width: width,
-        enabled: isLegal,
-        highlighted: isLegal,
-        onTap: onTap,
+      offset: Offset(0, isSelected ? -24 : isLegal ? -12 : 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isSelected)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'Tap to play',
+                style: TextStyle(
+                  color: AppColors.gold,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          PlayingCardWidget(
+            key: ValueKey(card.id),
+            card: card,
+            width: width,
+            enabled: isLegal,
+            highlighted: isLegal,
+            onTap: onTap,
+          ),
+        ],
       ),
     );
   }
