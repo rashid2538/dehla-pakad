@@ -160,6 +160,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     label: const Text('Friends'),
                   ),
                 ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => context.push('/local'),
+                    icon: const Icon(Icons.smart_toy),
+                    label: const Text('Play vs Bots'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.gold,
+                      side: const BorderSide(color: AppColors.gold),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 24),
                 if (user != null)
                   Expanded(

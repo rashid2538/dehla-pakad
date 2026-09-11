@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/theme.dart';
 import '../../core/services/auth_service.dart';
@@ -113,6 +114,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     'Debug: Anonymous Login',
                     style: TextStyle(color: AppColors.silver, fontSize: 12),
                   ),
+                ),
+                const SizedBox(height: 24),
+                // Play vs Bots — works without login
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _loading ? null : () => context.push('/local'),
+                    icon: const Icon(Icons.smart_toy),
+                    label: const Text('Play vs Bots'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'No login required • Fully offline',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),

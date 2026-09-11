@@ -2,37 +2,34 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/models/game_session.dart';
 import '../../core/models/game_state.dart';
 import '../../core/models/playing_card.dart';
-import '../../core/services/anti_cheat.dart';
 import '../../core/services/audio_service.dart';
-import '../../core/services/online_game_session.dart';
+import '../../core/services/anti_cheat.dart';
 import '../../core/theme.dart';
-import '../../core/utils/card_rules.dart'
-    show canClaimRemaining, getLegalCards, unseenCards;
+import '../../core/utils/card_rules.dart' show canClaimRemaining, getLegalCards, unseenCards;
 import '../../shared_widgets/playing_card_widget.dart';
 
-class GameTableScreen extends ConsumerStatefulWidget {
+/// Shared game table UI that works with any [GameSession] backend.
+///
+/// Used for both local play vs bots and (eventually) online multiplayer.
+class LocalGameTableScreen extends StatefulWidget {
   final GameSession session;
-  final String gameId; // kept for URL routing / deep linking
-  const GameTableScreen({super.key, required this.session, required this.gameId});
+  const LocalGameTableScreen({super.key, required this.session});
 
   @override
-  ConsumerState<GameTableScreen> createState() => _GameTableScreenState();
+  State<LocalGameTableScreen> createState() => _LocalGameTableScreenState();
 }
 
-class _GameTableScreenState extends ConsumerState<GameTableScreen>
+class _LocalGameTableScreenState extends State<LocalGameTableScreen>
     with WidgetsBindingObserver, AntiCheatMixin {
   late final GameSession _session;
   bool _playing = false;
   bool _resolvingTrick = false;
   int? _claimedTrick;
-  Timer? _trickWatchTimer;
-  GameState? _lastGame;
 
   GameState? _prevGame;
   bool _showTrumpBanner = false;
@@ -49,23 +46,10 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _session = widget.session;
-
-    // Sticky trick-watcher: guaranteed fallback that resolves any trick whose
-    // 4th card has been played but which hasn't been resolved yet (e.g. UI
-    // callbacks dropped because the widget was unmounted mid-play).
-    _trickWatchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      final game = _lastGame;
-      if (game == null || !mounted) return;
-      if (game.status != GameStatus.inProgress) return;
-      if (game.currentTurnSeat != null) return;
-      if (game.currentTrick?.plays.length != 4) return;
-      _scheduleResolveTrick(game, isTransition: false);
-    });
   }
 
   @override
   void dispose() {
-    _trickWatchTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -148,9 +132,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     );
   }
 
-  /// On lead holding only cards nobody can beat — end the game rather than
-  /// play out tricks whose outcome is already fixed. [GameService] re-checks
-  /// this in a transaction, so a stale read here can only cost a no-op.
   void _maybeClaimRest(GameState game, List<PlayingCard> hand, int mySeat) {
     if (_claimedTrick == game.trickNumber) return;
     if (game.status != GameStatus.inProgress) return;
@@ -186,12 +167,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
   }
 
   void _handleGameUpdate(GameState game, int mySeat) {
-    _lastGame = game;
-    // Delegate bot management to the session (online-only concern)
-    if (_session is OnlineGameSession) {
-      _session.onGameStateChanged(game);
-    }
-
     final prev = _prevGame;
     _prevGame = game;
     if (prev == null) return;
@@ -208,7 +183,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
 
     final myTeam = GameState.teamForSeat(mySeat);
 
-    // Remote card played (local plays are handled in _playCard)
+    // Remote card played
     final prevPlays = prev.currentTrick?.plays.length ?? 0;
     final nextPlays = game.currentTrick?.plays.length ?? 0;
     if (nextPlays > prevPlays && nextPlays > 0) {
@@ -218,10 +193,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       }
     }
 
-    // 4th card played — let animation run, then resolve.
-    // Schedule resolution on the transition (prevPlays < 4) AND as a safety
-    // net for any later emission where the trick is complete but still
-    // awaiting resolution (covers dropped/raced callbacks).
+    // 4th card played
     if (game.status == GameStatus.inProgress &&
         game.currentTurnSeat == null &&
         game.currentTrick?.plays.length == 4) {
@@ -246,7 +218,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       });
     }
 
-    // Trick resolved — trickNumber incremented, winner is currentTurnSeat
+    // Trick resolved
     if (game.trickNumber > prev.trickNumber &&
         prev.trickNumber > 0 &&
         game.currentTurnSeat != null) {
@@ -302,6 +274,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     // Game completed
     if (prev.status != GameStatus.completed &&
         game.status == GameStatus.completed) {
+      _session.publishFinalHands(_session.myUid);
       if (game.winningTeam == myTeam) {
         AudioService.instance.play(GameSound.victory);
         HapticService.heavy();
@@ -311,17 +284,13 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     }
   }
 
-  /// Schedules [GameService.resolveTrick] after a short visual delay so the
-  /// 4th card animation can play. [isTransition] is true when the current
-  /// state is a fresh 4th-card emission — those get the full animation delay.
   void _scheduleResolveTrick(GameState game, {required bool isTransition}) {
     if (_resolvingTrick) return;
     _resolvingTrick = true;
     final plays = game.currentTrick?.plays ?? const [];
     final allBotTrick =
         plays.isNotEmpty && plays.every((p) => game.seats[p.seat]?.isBot == true);
-    final delay =
-        isTransition ? (allBotTrick ? 200 : 600) : 100;
+    final delay = isTransition ? (allBotTrick ? 200 : 600) : 100;
     Future.delayed(Duration(milliseconds: delay), () {
       _resolvingTrick = false;
       if (!mounted) return;
@@ -351,25 +320,14 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                 );
               }
               final game = gameSnap.data!;
-              final mySeat = game.seatForUid(_session.myUid)?.seat;
+              final mySeat = _session.mySeat!;
 
-              if (mySeat != null) {
-                _handleGameUpdate(game, mySeat);
-              }
+              _handleGameUpdate(game, mySeat);
 
               if (game.status == GameStatus.completed) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) context.go('/result/${widget.gameId}');
+                  if (mounted) context.go('/local/result');
                 });
-              }
-
-              if (mySeat == null) {
-                return const Center(
-                  child: Text(
-                    'Not in this game',
-                    style: TextStyle(color: AppColors.ivory),
-                  ),
-                );
               }
 
               final isMyTurn = game.currentTurnSeat == mySeat;
@@ -393,7 +351,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                       children: [
                         Column(
                           children: [
-                            _buildTopBar(game),
+                            _buildInfoRail(game, mySeat),
                             if (_lastTrickPlays != null)
                               _buildLastTrickBar(),
                             Expanded(
@@ -404,6 +362,7 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
                                 legalCards,
                               ),
                             ),
+                            _buildTenTracker(game),
                             _buildHand(hand, legalCards, mySeat, isMyTurn),
                           ],
                         ),
@@ -430,43 +389,42 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       left: 0,
       right: 0,
       child: Center(
-        child:
-            Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
+        child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.maroonDark.withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.gold, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.gold.withValues(alpha: 0.3),
+                    blurRadius: 20,
+                    spreadRadius: 4,
                   ),
-                  decoration: BoxDecoration(
-                    color: AppColors.maroonDark.withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.gold, width: 2),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.gold.withValues(alpha: 0.3),
-                        blurRadius: 20,
-                        spreadRadius: 4,
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    '${suit.symbol} Trump is ${suit.name}!',
-                    style: TextStyle(
-                      color: (suit == Suit.hearts || suit == Suit.diamonds)
-                          ? AppColors.suitRed
-                          : AppColors.ivory,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                )
-                .animate()
-                .fadeIn(duration: 200.ms)
-                .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1))
-                .then()
-                .shimmer(
-                  duration: 600.ms,
-                  color: AppColors.gold.withValues(alpha: 0.3),
+                ],
+              ),
+              child: Text(
+                '${suit.symbol} Trump is ${suit.name}!',
+                style: TextStyle(
+                  color: (suit == Suit.hearts || suit == Suit.diamonds)
+                      ? AppColors.suitRed
+                      : AppColors.ivory,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
                 ),
+              ),
+            )
+            .animate()
+            .fadeIn(duration: 200.ms)
+            .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1))
+            .then()
+            .shimmer(
+              duration: 600.ms,
+              color: AppColors.gold.withValues(alpha: 0.3),
+            ),
       ),
     );
   }
@@ -514,105 +472,150 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
       left: 0,
       right: 0,
       child: Center(
-        child:
-            Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.maroonDark.withValues(alpha: 0.9),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: isTeamA ? AppColors.teamA : AppColors.teamB,
-                    ),
-                  ),
-                  child: Text(
-                    '10${suit.symbol} collected by ${isTeamA ? "Team A" : "Team B"}!',
-                    style: TextStyle(
-                      color: isTeamA ? AppColors.teamA : AppColors.teamB,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                )
-                .animate()
-                .fadeIn(duration: 200.ms)
-                .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1))
-                .then()
-                .fadeOut(delay: 800.ms),
+        child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.maroonDark.withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isTeamA ? AppColors.teamA : AppColors.teamB,
+                ),
+              ),
+              child: Text(
+                '10${suit.symbol} collected by ${isTeamA ? "Team A" : "Team B"}!',
+                style: TextStyle(
+                  color: isTeamA ? AppColors.teamA : AppColors.teamB,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            )
+            .animate()
+            .fadeIn(duration: 200.ms)
+            .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1))
+            .then()
+            .fadeOut(delay: 800.ms),
       ),
     );
   }
 
-  Widget _buildTopBar(GameState game) {
+  // ── §4.2 Dense info rail: Turn · Trick · Trump · Scores · Sound · Quit ──
+
+  Widget _buildInfoRail(GameState game, int mySeat) {
+    final turnSeat = game.currentTurnSeat;
+    final turnName = turnSeat != null
+        ? (game.seats[turnSeat]?.displayName ?? '?')
+        : '—';
+    final isMyTurn = turnSeat == mySeat;
+    final myTeam = GameState.teamForSeat(mySeat);
+    final partnerSeat = GameState.partnerSeat(mySeat);
+    final partner = game.seats[partnerSeat];
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppColors.maroonDark.withValues(alpha: 0.8),
-      child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      color: AppColors.maroonDark.withValues(alpha: 0.9),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              border: Border.all(color: AppColors.burgundy),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              game.roomCode,
-              style: const TextStyle(
-                color: AppColors.gold,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 2,
+          // Row 1: Turn · Trick · Trump · Sound · Quit
+          Row(
+            children: [
+              // Turn chip
+              _InfoChip(
+                icon: isMyTurn ? Icons.person : Icons.smart_toy,
+                label: isMyTurn ? 'Your turn' : turnName,
+                color: isMyTurn ? AppColors.gold : AppColors.silver,
+                glow: isMyTurn,
               ),
-            ),
-          ),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: game.trumpSuit != null
-                  ? AppColors.gold.withValues(alpha: 0.15)
-                  : Colors.transparent,
-              border: Border.all(
+              const SizedBox(width: 6),
+              // Trick chip
+              _InfoChip(
+                icon: null,
+                label: '${game.trickNumber}/13',
+                color: AppColors.ivory,
+              ),
+              const SizedBox(width: 6),
+              // Trump chip
+              _InfoChip(
+                icon: null,
+                label: game.trumpSuit != null
+                    ? 'Trump ${game.trumpSuit!.symbol}'
+                    : 'No Trump',
                 color: game.trumpSuit != null
-                    ? AppColors.gold
-                    : AppColors.burgundy,
+                    ? ((game.trumpSuit == Suit.hearts ||
+                            game.trumpSuit == Suit.diamonds)
+                        ? AppColors.suitRed
+                        : AppColors.gold)
+                    : AppColors.silver,
               ),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: game.trumpSuit != null
-                ? Text(
-                    'Trump ${game.trumpSuit!.symbol}',
-                    style: TextStyle(
-                      color:
-                          (game.trumpSuit == Suit.hearts ||
-                              game.trumpSuit == Suit.diamonds)
-                          ? AppColors.suitRed
-                          : AppColors.ivory,
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  )
-                : const Text(
-                    'No Trump',
-                    style: TextStyle(color: AppColors.silver, fontSize: 12),
-                  ),
+              const Spacer(),
+              // Sound
+              GestureDetector(
+                onTap: () async {
+                  await AudioService.instance.toggleMute();
+                  setState(() {});
+                },
+                onLongPress: () => _showVolumeDialog(),
+                child: Icon(
+                  AudioService.instance.muted
+                      ? Icons.volume_off
+                      : Icons.volume_up,
+                  color: AppColors.gold,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Quit
+              GestureDetector(
+                onTap: () => _showQuitDialog(),
+                child: const Icon(
+                  Icons.close,
+                  color: AppColors.silver,
+                  size: 18,
+                ),
+              ),
+            ],
           ),
-          const Spacer(),
-          _buildTeamScore(game),
-          const SizedBox(width: 4),
-          GestureDetector(
-            onTap: () async {
-              await AudioService.instance.toggleMute();
-              setState(() {});
-            },
-            onLongPress: () => _showVolumeDialog(),
-            child: Icon(
-              AudioService.instance.muted ? Icons.volume_off : Icons.volume_up,
-              color: AppColors.gold,
-              size: 20,
-            ),
+          const SizedBox(height: 4),
+          // Row 2: Team scores with tens
+          Row(
+            children: [
+              // Partner info
+              Expanded(
+                child: Text(
+                  partner != null
+                      ? 'Partner: ${partner.displayName}'
+                      : '',
+                  style: TextStyle(
+                    color: (myTeam == 'teamA'
+                            ? AppColors.teamA
+                            : AppColors.teamB)
+                        .withValues(alpha: 0.6),
+                    fontSize: 10,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 4),
+              _ScoreChipDense(
+                label: 'A',
+                tricks: game.trickPileA.trickCount,
+                tens: game.collectedTens,
+                team: 'teamA',
+                color: AppColors.teamA,
+              ),
+              const SizedBox(width: 6),
+              _ScoreChipDense(
+                label: 'B',
+                tricks: game.trickPileB.trickCount,
+                tens: game.collectedTens,
+                team: 'teamB',
+                color: AppColors.teamB,
+              ),
+            ],
           ),
         ],
       ),
@@ -682,66 +685,59 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     );
   }
 
-  Widget _buildTeamScore(GameState game) {
-    final tricksA = game.trickPileA.trickCount;
-    final tricksB = game.trickPileB.trickCount;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          'T${game.trickNumber}/13',
-          style: const TextStyle(color: AppColors.silver, fontSize: 13),
+  void _showQuitDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.maroonDark,
+        title: const Text('Quit Game?',
+            style: TextStyle(color: AppColors.gold)),
+        content: const Text(
+          'Leave this game and return to the menu?',
+          style: TextStyle(color: AppColors.ivory),
         ),
-        const SizedBox(width: 8),
-        _scoreChip('A', tricksA, game.collectedTens, 'teamA', AppColors.teamA),
-        const SizedBox(width: 4),
-        _scoreChip('B', tricksB, game.collectedTens, 'teamB', AppColors.teamB),
-      ],
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child:
+                const Text('Stay', style: TextStyle(color: AppColors.silver)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _session.dispose();
+              context.go('/');
+            },
+            child:
+                const Text('Quit', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _scoreChip(
-    String label,
-    int tricks,
-    CollectedTens collected,
-    String team,
-    Color color,
-  ) {
-    final capturedTens = collected.tens.entries
-        .where((e) => e.value == team)
-        .map((e) {
-      final suit = Suit.fromLetter(e.key.substring(2));
-      return suit;
-    }).toList();
+  // ── §4.2 Ten tracker strip ──
 
+  Widget _buildTenTracker(GameState game) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: color.withValues(alpha: 0.5)),
-        borderRadius: BorderRadius.circular(4),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      color: AppColors.maroonDark.withValues(alpha: 0.7),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            '$label: $tricks',
+          const Text(
+            'TENS ',
             style: TextStyle(
-              color: color,
-              fontSize: 14,
+              color: AppColors.silver,
+              fontSize: 10,
               fontWeight: FontWeight.bold,
+              letterSpacing: 1,
             ),
           ),
-          for (final suit in capturedTens)
-            Text(
-              suit.symbol,
-              style: TextStyle(
-                color: (suit == Suit.hearts || suit == Suit.diamonds)
-                    ? AppColors.suitRed
-                    : AppColors.ivory,
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+          for (final suit in Suit.values) ...[
+            const SizedBox(width: 6),
+            _TenIcon(suit: suit, collectedTens: game.collectedTens),
+          ],
         ],
       ),
     );
@@ -836,6 +832,8 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     );
   }
 
+  // ── §4.2 Full opponent edge panels ──
+
   Widget _buildOpponentArea(
     GameState game,
     int seat,
@@ -847,6 +845,10 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     final isActive = game.currentTurnSeat == seat;
     final hasPlayed = game.currentTrick?.plays.any((p) => p.seat == seat) ?? false;
     final cardCount = 13 - game.trickNumber + 1 - (hasPlayed ? 1 : 0);
+    final teamColor = GameState.teamForSeat(seat) == 'teamA'
+        ? AppColors.teamA
+        : AppColors.teamB;
+    final stackCount = cardCount.clamp(0, 6);
 
     return Align(
       alignment: alignment,
@@ -854,93 +856,128 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         padding: padding,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 300),
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: isActive
-                ? Border.all(color: AppColors.gold, width: 2)
-                : null,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isActive ? AppColors.gold : teamColor.withValues(alpha: 0.4),
+              width: isActive ? 2 : 1,
+            ),
             color: isActive
                 ? AppColors.gold.withValues(alpha: 0.08)
-                : Colors.transparent,
+                : AppColors.maroonDark.withValues(alpha: 0.6),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Avatar + Name row
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (player?.isBot == true)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 3),
-                      child: Icon(
-                        Icons.smart_toy,
-                        color: isActive ? AppColors.gold : AppColors.silver,
-                        size: 11,
-                      ),
+                  // Avatar with team ring
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: teamColor, width: 2),
                     ),
-                  Flexible(
-                    child: Text(
-                      player?.displayName ?? 'Empty',
-                      style: TextStyle(
-                        color: isActive ? AppColors.gold : AppColors.ivory,
-                        fontSize: 11,
-                        fontWeight: isActive
-                            ? FontWeight.bold
-                            : FontWeight.normal,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    child: CircleAvatar(
+                      radius: 12,
+                      backgroundColor: teamColor.withValues(alpha: 0.2),
+                      child: player?.isBot == true
+                          ? Icon(Icons.smart_toy, color: teamColor, size: 14)
+                          : Text(
+                              (player?.displayName ?? '?')[0].toUpperCase(),
+                              style: TextStyle(
+                                color: teamColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                     ),
+                  ),
+                  const SizedBox(width: 6),
+                  // Name + difficulty
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        player?.displayName ?? 'Empty',
+                        style: TextStyle(
+                          color: isActive ? AppColors.gold : AppColors.ivory,
+                          fontSize: 11,
+                          fontWeight: isActive
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (player?.isBot == true)
+                        Text(
+                          (player!.botDifficulty?.name ?? 'medium')
+                              .toUpperCase(),
+                          style: TextStyle(
+                            color: teamColor.withValues(alpha: 0.6),
+                            fontSize: 8,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),
               if (player?.isBot == true && isActive)
-                Text(
-                      'thinking...',
-                      style: TextStyle(
-                        color: AppColors.gold.withValues(alpha: 0.6),
-                        fontSize: 9,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    )
-                    .animate(onPlay: (c) => c.repeat())
-                    .fadeIn(duration: 600.ms)
-                    .then()
-                    .fadeOut(duration: 600.ms),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                        'thinking...',
+                        style: TextStyle(
+                          color: AppColors.gold.withValues(alpha: 0.6),
+                          fontSize: 9,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      )
+                      .animate(onPlay: (c) => c.repeat())
+                      .fadeIn(duration: 600.ms)
+                      .then()
+                      .fadeOut(duration: 600.ms),
+                ),
               const SizedBox(height: 4),
+              // Card count (big number) + stack
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (var i = 0; i < (cardCount.clamp(0, 5)); i++)
-                    Padding(
-                      padding: EdgeInsets.only(left: i > 0 ? -cardW * 0.5 : 0),
-                      child: PlayingCardWidget(width: cardW * 0.55),
+                  // Stacked face-down cards
+                  SizedBox(
+                    width: cardW * 0.45 * 2.2,
+                    height: cardW * 0.45 * 1.4,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        for (var i = 0; i < stackCount; i++)
+                          Positioned(
+                            left: i * 4.0,
+                            top: i * 1.5,
+                            child: PlayingCardWidget(
+                              width: cardW * 0.45,
+                            ),
+                          ),
+                      ],
                     ),
-                  if (cardCount > 5)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child: Text(
-                        '+${cardCount - 5}',
-                        style: const TextStyle(
-                          color: AppColors.silver,
-                          fontSize: 10,
-                        ),
-                      ),
+                  ),
+                  const SizedBox(width: 4),
+                  // Big card count
+                  Text(
+                    '$cardCount',
+                    style: TextStyle(
+                      color: isActive ? AppColors.gold : teamColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
                     ),
+                  ),
                 ],
-              ),
-              Text(
-                player != null
-                    ? GameState.teamForSeat(seat).replaceAll('team', 'Team ')
-                    : '',
-                style: TextStyle(
-                  color: player != null
-                      ? (GameState.teamForSeat(seat) == 'teamA'
-                            ? AppColors.teamA
-                            : AppColors.teamB)
-                      : AppColors.silver,
-                  fontSize: 9,
-                ),
               ),
             ],
           ),
@@ -949,91 +986,136 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
     );
   }
 
+  // ── §4.2 Bigger center trick area with lead-suit watermark + deck fan ──
+
   Widget _buildTrickArea(GameState game, int mySeat, double cardW) {
     final trick = game.currentTrick;
-    if (trick == null) return const SizedBox.shrink();
+    final playCount = trick?.plays.length ?? 0;
+    final cardsRemaining = 52 - (game.trickNumber - 1) * 4 - playCount;
+    final deckFanCount = (cardsRemaining / 4).ceil().clamp(0, 8);
 
-    final plays = trick.plays;
+    // Bigger center: scale to min(available width, available height)
+    final centerSize = cardW * 3.5;
+
     final positions = <int, Offset>{
-      mySeat: Offset(0, cardW * 0.8),
-      _relativeSeat(mySeat, 1): Offset(cardW * 0.9, 0),
-      _relativeSeat(mySeat, 2): Offset(0, -cardW * 0.8),
-      _relativeSeat(mySeat, 3): Offset(-cardW * 0.9, 0),
+      mySeat: Offset(0, centerSize * 0.22),
+      _relativeSeat(mySeat, 1): Offset(centerSize * 0.25, 0),
+      _relativeSeat(mySeat, 2): Offset(0, -centerSize * 0.22),
+      _relativeSeat(mySeat, 3): Offset(-centerSize * 0.25, 0),
     };
-    // Cards fly in from 3x the final offset (player's edge direction)
     final flyFrom = <int, Offset>{
-      mySeat: Offset(0, cardW * 2.5),
-      _relativeSeat(mySeat, 1): Offset(cardW * 2.5, 0),
-      _relativeSeat(mySeat, 2): Offset(0, -cardW * 2.5),
-      _relativeSeat(mySeat, 3): Offset(-cardW * 2.5, 0),
+      mySeat: Offset(0, centerSize * 0.6),
+      _relativeSeat(mySeat, 1): Offset(centerSize * 0.6, 0),
+      _relativeSeat(mySeat, 2): Offset(0, -centerSize * 0.6),
+      _relativeSeat(mySeat, 3): Offset(-centerSize * 0.6, 0),
     };
 
     return SizedBox(
-      width: cardW * 3,
-      height: cardW * 3,
+      width: centerSize,
+      height: centerSize,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          Center(
-            child: Container(
-              width: cardW * 2.5,
-              height: cardW * 2.5,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.burgundy.withValues(alpha: 0.3),
-                border: Border.all(
-                  color: AppColors.gold.withValues(alpha: 0.15),
+          // Deck fan (face-down cards in center, shrinks as game progresses)
+          if (deckFanCount > 0 && playCount < 4)
+            for (var i = 0; i < deckFanCount; i++)
+              Center(
+                child: Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()
+                    ..translateByDouble(
+                      -centerSize * 0.15 + i * 3.0,
+                      -centerSize * 0.05 + i * 1.0,
+                      0,
+                      1,
+                    )
+                    ..rotateZ(-0.08 + i * 0.02),
+                  child: PlayingCardWidget(
+                    width: cardW * 0.55,
+                  ).animate().fadeIn(
+                    delay: Duration(milliseconds: i * 50),
+                    duration: 200.ms,
+                  ),
                 ),
               ),
-              child: game.leadSuit != null && trick.plays.isNotEmpty
+          // Lead-suit watermark glow
+          Center(
+            child: Container(
+              width: centerSize * 0.75,
+              height: centerSize * 0.75,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: game.leadSuit != null && playCount > 0
+                    ? RadialGradient(
+                        colors: [
+                          (game.leadSuit == Suit.hearts ||
+                                  game.leadSuit == Suit.diamonds)
+                              ? AppColors.suitRed.withValues(alpha: 0.12)
+                              : AppColors.ivory.withValues(alpha: 0.08),
+                          Colors.transparent,
+                        ],
+                      )
+                    : null,
+                color: game.leadSuit == null || playCount == 0
+                    ? AppColors.burgundy.withValues(alpha: 0.2)
+                    : null,
+                border: Border.all(
+                  color: AppColors.gold.withValues(alpha: 0.1),
+                ),
+              ),
+              child: game.leadSuit != null && playCount > 0
                   ? Center(
                       child: Text(
                         game.leadSuit!.symbol,
                         style: TextStyle(
-                          fontSize: cardW * 0.5,
+                          fontSize: centerSize * 0.15,
                           color: (game.leadSuit == Suit.hearts ||
                                   game.leadSuit == Suit.diamonds)
-                              ? AppColors.suitRed.withValues(alpha: 0.3)
-                              : AppColors.ivory.withValues(alpha: 0.2),
+                              ? AppColors.suitRed.withValues(alpha: 0.25)
+                              : AppColors.ivory.withValues(alpha: 0.15),
                         ),
                       ),
                     )
                   : null,
             ),
           ),
-          for (var i = 0; i < plays.length; i++)
-            () {
-              final seat = plays[i].seat;
-              final from = flyFrom[seat] ?? Offset.zero;
-              final to = positions[seat] ?? Offset.zero;
-              final dx = from.dx - to.dx;
-              final dy = from.dy - to.dy;
-              return Center(
-                child: Transform.translate(
-                  offset: to,
-                  child: PlayingCardWidget(
-                          card: plays[i].card, width: cardW * 0.85)
-                      .animate()
-                      .moveX(
-                        begin: dx,
-                        end: 0,
-                        duration: 300.ms,
-                        curve: Curves.easeOutCubic,
-                      )
-                      .moveY(
-                        begin: dy,
-                        end: 0,
-                        duration: 300.ms,
-                        curve: Curves.easeOutCubic,
-                      )
-                      .fadeIn(duration: 150.ms),
-                ),
-              );
-            }(),
+          // Played cards at compass positions
+          if (trick != null)
+            for (var i = 0; i < trick.plays.length; i++)
+              () {
+                final seat = trick.plays[i].seat;
+                final from = flyFrom[seat] ?? Offset.zero;
+                final to = positions[seat] ?? Offset.zero;
+                final dx = from.dx - to.dx;
+                final dy = from.dy - to.dy;
+                return Center(
+                  child: Transform.translate(
+                    offset: to,
+                    child: PlayingCardWidget(
+                            card: trick.plays[i].card, width: cardW * 0.9)
+                        .animate()
+                        .moveX(
+                          begin: dx,
+                          end: 0,
+                          duration: 300.ms,
+                          curve: Curves.easeOutCubic,
+                        )
+                        .moveY(
+                          begin: dy,
+                          end: 0,
+                          duration: 300.ms,
+                          curve: Curves.easeOutCubic,
+                        )
+                        .fadeIn(duration: 150.ms),
+                  ),
+                );
+              }(),
         ],
       ),
     );
   }
+
+  // ── §4.2 Bigger hand: 40–120px, denser fan, legal lift + gold glow ──
 
   Widget _buildHand(
     List<PlayingCard> hand,
@@ -1072,8 +1154,6 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         builder: (context, constraints) {
           final n = sorted.length;
           if (n == 0) {
-            // Empty hand: render a placeholder rectangle so the deck area
-            // still looks like a card slot.
             final cardW = (constraints.maxWidth * 0.18).clamp(50.0, 100.0);
             final cardH = cardW * 1.4;
             return Center(
@@ -1092,18 +1172,18 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
             );
           }
           final availW = constraints.maxWidth;
-          // Cards overlap: visible fraction ~35% per stacked card
-          const visibleFrac = 0.35;
-          final cardW = (availW / (1 + (n - 1) * visibleFrac)).clamp(50.0, 100.0);
+          // §4.2: Scale clamp up to ~120px, denser fanned fit
+          const visibleFrac = 0.32;
+          final cardW = (availW / (1 + (n - 1) * visibleFrac)).clamp(40.0, 120.0);
           final cardH = cardW * 1.4;
           final step = n > 1
-              ? ((availW - cardW) / (n - 1)).clamp(0.0, cardW * 0.65)
+              ? ((availW - cardW) / (n - 1)).clamp(0.0, cardW * 0.6)
               : 0.0;
           final totalW = cardW + step * (n - 1);
           final startX = (availW - totalW) / 2;
 
           return SizedBox(
-            height: cardH + 16, // extra space for lifted cards
+            height: cardH + 16,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
@@ -1141,6 +1221,167 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
         enabled: isLegal,
         highlighted: isLegal,
         onTap: onTap,
+      ),
+    );
+  }
+}
+
+// ── §4.2 Helper widgets for dense info rail ──
+
+class _InfoChip extends StatelessWidget {
+  final IconData? icon;
+  final String label;
+  final Color color;
+  final bool glow;
+
+  const _InfoChip({
+    this.icon,
+    required this.label,
+    required this.color,
+    this.glow = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: glow ? color.withValues(alpha: 0.15) : Colors.transparent,
+        border: Border.all(
+          color: glow ? color : color.withValues(alpha: 0.4),
+          width: glow ? 1.5 : 1,
+        ),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, color: color, size: 12),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScoreChipDense extends StatelessWidget {
+  final String label;
+  final int tricks;
+  final CollectedTens tens;
+  final String team;
+  final Color color;
+
+  const _ScoreChipDense({
+    required this.label,
+    required this.tricks,
+    required this.tens,
+    required this.team,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final capturedTens = tens.tens.entries
+        .where((e) => e.value == team)
+        .map((e) => Suit.fromLetter(e.key.substring(2)))
+        .toList();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label: $tricks',
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          for (final suit in capturedTens)
+            Text(
+              suit.symbol,
+              style: TextStyle(
+                color: (suit == Suit.hearts || suit == Suit.diamonds)
+                    ? AppColors.suitRed
+                    : AppColors.ivory,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TenIcon extends StatelessWidget {
+  final Suit suit;
+  final CollectedTens collectedTens;
+
+  const _TenIcon({required this.suit, required this.collectedTens});
+
+  @override
+  Widget build(BuildContext context) {
+    final team = collectedTens.tens['10${suit.letter}'];
+    final isRed = suit == Suit.hearts || suit == Suit.diamonds;
+    final collected = team != null;
+    final teamColor = team == 'teamA'
+        ? AppColors.teamA
+        : team == 'teamB'
+            ? AppColors.teamB
+            : null;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(4),
+        color: collected
+            ? teamColor!.withValues(alpha: 0.2)
+            : AppColors.maroonDark.withValues(alpha: 0.5),
+        border: Border.all(
+          color: collected
+              ? teamColor!.withValues(alpha: 0.6)
+              : AppColors.burgundy.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '10${suit.symbol}',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: collected
+                  ? (isRed ? AppColors.suitRed : AppColors.ivory)
+                  : AppColors.silver.withValues(alpha: 0.4),
+            ),
+          ),
+          Text(
+            collected ? (team == 'teamA' ? 'A' : 'B') : '—',
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              color: teamColor ?? AppColors.silver.withValues(alpha: 0.3),
+            ),
+          ),
+        ],
       ),
     );
   }

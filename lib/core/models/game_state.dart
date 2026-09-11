@@ -186,6 +186,91 @@ class GameState {
   PlayerSeat? seatForUid(String uid) =>
       players.where((p) => p.uid == uid).firstOrNull;
 
+  /// Sentinel used by [copyWith]: omitting a nullable argument keeps the
+  /// current value, while passing `null` explicitly clears it (e.g. the 4th
+  /// play of a trick clears [currentTurnSeat], or a new round clears trump).
+  static const Object _unset = Object();
+
+  GameState copyWith({
+    String? gameId,
+    GameStatus? status,
+    String? roomCode,
+    String? hostId,
+    Map<int, PlayerSeat?>? seats,
+    Object? startingPlayerSeat = _unset,
+    Object? currentTurnSeat = _unset,
+    Object? leadSuit = _unset,
+    Object? trumpSuit = _unset,
+    Object? trumpTeam = _unset,
+    Object? trumpSetterSeat = _unset,
+    int? trickNumber,
+    Object? currentTrick = _unset,
+    CollectedTens? collectedTens,
+    TrickPile? trickPileA,
+    TrickPile? trickPileB,
+    Object? winningTeam = _unset,
+    Object? victoryType = _unset,
+    Object? endReason = _unset,
+    Map<int, List<String>>? finalHands,
+    Object? previousTrumpSetterSeat = _unset,
+    Object? previousVictoryType = _unset,
+    Object? previousWinningTeam = _unset,
+    Object? previousTrumpTeam = _unset,
+  }) {
+    return GameState(
+      gameId: gameId ?? this.gameId,
+      status: status ?? this.status,
+      roomCode: roomCode ?? this.roomCode,
+      hostId: hostId ?? this.hostId,
+      seats: seats ?? this.seats,
+      startingPlayerSeat: identical(startingPlayerSeat, _unset)
+          ? this.startingPlayerSeat
+          : startingPlayerSeat as int?,
+      currentTurnSeat: identical(currentTurnSeat, _unset)
+          ? this.currentTurnSeat
+          : currentTurnSeat as int?,
+      leadSuit:
+          identical(leadSuit, _unset) ? this.leadSuit : leadSuit as Suit?,
+      trumpSuit:
+          identical(trumpSuit, _unset) ? this.trumpSuit : trumpSuit as Suit?,
+      trumpTeam: identical(trumpTeam, _unset)
+          ? this.trumpTeam
+          : trumpTeam as String?,
+      trumpSetterSeat: identical(trumpSetterSeat, _unset)
+          ? this.trumpSetterSeat
+          : trumpSetterSeat as int?,
+      trickNumber: trickNumber ?? this.trickNumber,
+      currentTrick: identical(currentTrick, _unset)
+          ? this.currentTrick
+          : currentTrick as CurrentTrick?,
+      collectedTens: collectedTens ?? this.collectedTens,
+      trickPileA: trickPileA ?? this.trickPileA,
+      trickPileB: trickPileB ?? this.trickPileB,
+      winningTeam: identical(winningTeam, _unset)
+          ? this.winningTeam
+          : winningTeam as String?,
+      victoryType: identical(victoryType, _unset)
+          ? this.victoryType
+          : victoryType as VictoryType?,
+      endReason: identical(endReason, _unset)
+          ? this.endReason
+          : endReason as String?,
+      finalHands: finalHands ?? this.finalHands,
+      previousTrumpSetterSeat: identical(previousTrumpSetterSeat, _unset)
+          ? this.previousTrumpSetterSeat
+          : previousTrumpSetterSeat as int?,
+      previousVictoryType: identical(previousVictoryType, _unset)
+          ? this.previousVictoryType
+          : previousVictoryType as VictoryType?,
+      previousWinningTeam: identical(previousWinningTeam, _unset)
+          ? this.previousWinningTeam
+          : previousWinningTeam as String?,
+      previousTrumpTeam: identical(previousTrumpTeam, _unset)
+          ? this.previousTrumpTeam
+          : previousTrumpTeam as String?,
+    );
+  }
+
   Map<String, dynamic> toFirestore() => {
         'status': status.name,
         'roomCode': roomCode,
