@@ -10,6 +10,7 @@ import '../../core/services/audio_service.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/game_service.dart';
 import '../../core/theme.dart';
+import '../../shared_widgets/team_stats_dialog.dart';
 
 class LobbyScreen extends ConsumerStatefulWidget {
   final String gameId;
@@ -105,6 +106,13 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
             );
       }
     });
+  }
+
+  void _showTeamStatsDialog(GameState game) {
+    showDialog(
+      context: context,
+      builder: (_) => TeamStatsDialog(game: game),
+    );
   }
 
   void _showNameEditDialog(GameState game) {
@@ -203,43 +211,54 @@ class _LobbyScreenState extends ConsumerState<LobbyScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        icon: const Icon(Icons.arrow_back, color: AppColors.gold),
-                        onPressed: () async {
-                          final leave = await showDialog<bool>(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              backgroundColor: AppColors.maroonDark,
-                              title: const Text('Leave Room?',
-                                  style: TextStyle(color: AppColors.gold)),
-                              content: const Text(
-                                'You will be removed from this room.',
-                                style: TextStyle(color: AppColors.ivory),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back,
+                              color: AppColors.gold),
+                          onPressed: () async {
+                            final leave = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: AppColors.maroonDark,
+                                title: const Text('Leave Room?',
+                                    style: TextStyle(color: AppColors.gold)),
+                                content: const Text(
+                                  'You will be removed from this room.',
+                                  style: TextStyle(color: AppColors.ivory),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('Stay',
+                                        style:
+                                            TextStyle(color: AppColors.silver)),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: const Text('Leave',
+                                        style:
+                                            TextStyle(color: AppColors.error)),
+                                  ),
+                                ],
                               ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx, false),
-                                  child: const Text('Stay',
-                                      style: TextStyle(color: AppColors.silver)),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx, true),
-                                  child: const Text('Leave',
-                                      style: TextStyle(color: AppColors.error)),
-                                ),
-                              ],
-                            ),
-                          );
-                          if (leave == true && context.mounted) {
-                            await ref
-                                .read(gameServiceProvider)
-                                .leaveRoom(widget.gameId, _uid);
-                            if (context.mounted) context.go('/');
-                          }
-                        },
-                      ),
+                            );
+                            if (leave == true && context.mounted) {
+                              await ref
+                                  .read(gameServiceProvider)
+                                  .leaveRoom(widget.gameId, _uid);
+                              if (context.mounted) context.go('/');
+                            }
+                          },
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.emoji_events,
+                              color: AppColors.gold),
+                          tooltip: 'Room stats',
+                          onPressed: () => _showTeamStatsDialog(game),
+                        ),
+                      ],
                     ),
                     _RoomCodeBar(roomCode: game.roomCode),
                     const SizedBox(height: 8),

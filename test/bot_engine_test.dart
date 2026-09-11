@@ -221,6 +221,133 @@ void main() {
       // Should play lowest non-10 of chosen suit
       expect(choice, '3S');
     });
+
+    test('hard bot avoids setting trump where partner is known void', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.hearts,
+        currentTrick: CurrentTrick(
+          leaderSeat: 2,
+          plays: [TrickPlay(2, PlayingCard.fromId('3H'))],
+        ),
+      );
+      final mem = BotMemory();
+      // Partner seat 3 is known void in diamonds
+      mem.knownVoidSuits[3]!.add(Suit.diamonds);
+      // Hand: 3 spades vs 2 diamonds; without void info spades would win,
+      // but diamonds are penalized because partner cannot support that trump.
+      final hand = ['3S', '5S', '7D', '9D'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+        memory: mem,
+      );
+      final card = PlayingCard.fromId(choice);
+      expect(card.suit, Suit.spades);
+    });
+
+    test('hard bot leads trump to draw when holding high trump', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        trumpSuit: Suit.clubs,
+      );
+      final hand = ['AC', '5C', '7D', '9H'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+      );
+      expect(choice, '5C'); // cheapest trump to draw opponents' trumps
+    });
+
+    test('hard bot leads suit partner is void in to set up a ruff', () {
+      final state = _makeState();
+      final mem = BotMemory();
+      // Partner seat 3 is known void in diamonds
+      mem.knownVoidSuits[3]!.add(Suit.diamonds);
+      final hand = ['3D', '5D', '7S', '9H'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+        memory: mem,
+      );
+      final card = PlayingCard.fromId(choice);
+      expect(card.suit, Suit.diamonds);
+      expect(choice, '3D'); // cheapest diamond
+    });
+
+    test('hard bot covers partner when a higher card may still be out', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.spades,
+        trickNumber: 12,
+        currentTrick: CurrentTrick(
+          leaderSeat: 3,
+          plays: [
+            TrickPlay(3, PlayingCard.fromId('QS')), // partner winning
+            TrickPlay(4, PlayingCard.fromId('5S')),
+          ],
+        ),
+      );
+      // Bot holds Ace; King is still unseen so a later opponent could beat QS
+      final hand = ['AS', '3S', '7H'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+      );
+      expect(choice, 'AS'); // cover partner's Queen with Ace
+    });
+
+    test('hard bot sluffs instead of trumping partner winner', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.hearts,
+        trumpSuit: Suit.clubs,
+        currentTrick: CurrentTrick(
+          leaderSeat: 3,
+          plays: [
+            TrickPlay(3, PlayingCard.fromId('AH')), // partner winning
+            TrickPlay(4, PlayingCard.fromId('5H')),
+          ],
+        ),
+      );
+      final hand = ['3C', '5D', '7S'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+      );
+      expect(choice, isNot('3C')); // do not trump partner
+    });
+
+    test('hard bot sluffs from shortest side suit', () {
+      final state = _makeState(
+        currentTurnSeat: 1,
+        leadSuit: Suit.hearts,
+        trumpSuit: Suit.clubs,
+        currentTrick: CurrentTrick(
+          leaderSeat: 2,
+          plays: [TrickPlay(2, PlayingCard.fromId('3H'))],
+        ),
+      );
+      // Void in hearts; shortest side suit is spades (1 card)
+      final hand = ['2C', '5S', '7D', '9D'];
+      final choice = chooseBotCard(
+        hand: hand,
+        gameState: state,
+        botSeat: 1,
+        difficulty: BotDifficulty.hard,
+      );
+      expect(choice, '5S'); // sluff singleton spade
+    });
   });
 
   group('BotMemory', () {

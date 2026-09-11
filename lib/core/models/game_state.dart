@@ -25,6 +25,55 @@ enum VictoryType {
           orElse: () => victory);
 }
 
+class TeamStats {
+  final int wins;
+  final int losses;
+  final int courtWins;
+  final int poopyWins;
+
+  const TeamStats({
+    this.wins = 0,
+    this.losses = 0,
+    this.courtWins = 0,
+    this.poopyWins = 0,
+  });
+
+  TeamStats copyWith({
+    int? wins,
+    int? losses,
+    int? courtWins,
+    int? poopyWins,
+  }) =>
+      TeamStats(
+        wins: wins ?? this.wins,
+        losses: losses ?? this.losses,
+        courtWins: courtWins ?? this.courtWins,
+        poopyWins: poopyWins ?? this.poopyWins,
+      );
+
+  TeamStats applyResult({required bool won, required VictoryType? type}) =>
+      copyWith(
+        wins: won ? wins + 1 : wins,
+        losses: won ? losses : losses + 1,
+        courtWins: won && type == VictoryType.court ? courtWins + 1 : courtWins,
+        poopyWins: won && type == VictoryType.poopy ? poopyWins + 1 : poopyWins,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'wins': wins,
+        'losses': losses,
+        'courtWins': courtWins,
+        'poopyWins': poopyWins,
+      };
+
+  factory TeamStats.fromMap(Map<String, dynamic>? m) => TeamStats(
+        wins: m?['wins'] as int? ?? 0,
+        losses: m?['losses'] as int? ?? 0,
+        courtWins: m?['courtWins'] as int? ?? 0,
+        poopyWins: m?['poopyWins'] as int? ?? 0,
+      );
+}
+
 class TrickPlay {
   final int seat;
   final PlayingCard card;
@@ -138,6 +187,7 @@ class GameState {
   final VictoryType? previousVictoryType;
   final String? previousWinningTeam;
   final String? previousTrumpTeam;
+  final Map<String, TeamStats> teamStats;
   final DateTime? updatedAt;
 
   const GameState({
@@ -165,6 +215,7 @@ class GameState {
     this.previousVictoryType,
     this.previousWinningTeam,
     this.previousTrumpTeam,
+    this.teamStats = const {'teamA': TeamStats(), 'teamB': TeamStats()},
     this.updatedAt,
   });
 
@@ -216,6 +267,7 @@ class GameState {
     Object? previousVictoryType = _unset,
     Object? previousWinningTeam = _unset,
     Object? previousTrumpTeam = _unset,
+    Map<String, TeamStats>? teamStats,
   }) {
     return GameState(
       gameId: gameId ?? this.gameId,
@@ -223,6 +275,7 @@ class GameState {
       roomCode: roomCode ?? this.roomCode,
       hostId: hostId ?? this.hostId,
       seats: seats ?? this.seats,
+      teamStats: teamStats ?? this.teamStats,
       startingPlayerSeat: identical(startingPlayerSeat, _unset)
           ? this.startingPlayerSeat
           : startingPlayerSeat as int?,
@@ -297,6 +350,9 @@ class GameState {
         'previousVictoryType': previousVictoryType?.name,
         'previousWinningTeam': previousWinningTeam,
         'previousTrumpTeam': previousTrumpTeam,
+        'teamStats': {
+          for (final e in teamStats.entries) e.key: e.value.toMap(),
+        },
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
@@ -346,7 +402,15 @@ class GameState {
           VictoryType.fromString(m['previousVictoryType'] as String?),
       previousWinningTeam: m['previousWinningTeam'] as String?,
       previousTrumpTeam: m['previousTrumpTeam'] as String?,
+      teamStats: _teamStatsFromMap(m['teamStats'] as Map<String, dynamic>?),
       updatedAt: (m['updatedAt'] as Timestamp?)?.toDate(),
     );
   }
+
+  static Map<String, TeamStats> _teamStatsFromMap(
+    Map<String, dynamic>? m,
+  ) => {
+        'teamA': TeamStats.fromMap(m?['teamA'] as Map<String, dynamic>?),
+        'teamB': TeamStats.fromMap(m?['teamB'] as Map<String, dynamic>?),
+      };
 }

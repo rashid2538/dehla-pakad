@@ -15,6 +15,7 @@ import '../../core/theme.dart';
 import '../../core/utils/card_rules.dart'
     show canClaimRemaining, getLegalCards, unseenCards;
 import '../../shared_widgets/playing_card_widget.dart';
+import '../../shared_widgets/team_stats_dialog.dart';
 
 class GameTableScreen extends ConsumerStatefulWidget {
   final GameSession session;
@@ -601,6 +602,15 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
           ),
           const Spacer(),
           _buildTeamScore(game),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => _showTeamStatsDialog(game),
+            child: const Icon(
+              Icons.emoji_events,
+              color: AppColors.gold,
+              size: 20,
+            ),
+          ),
           const SizedBox(width: 4),
           GestureDetector(
             onTap: () async {
@@ -616,6 +626,13 @@ class _GameTableScreenState extends ConsumerState<GameTableScreen>
           ),
         ],
       ),
+    );
+  }
+
+  void _showTeamStatsDialog(GameState game) {
+    showDialog(
+      context: context,
+      builder: (_) => TeamStatsDialog(game: game),
     );
   }
 

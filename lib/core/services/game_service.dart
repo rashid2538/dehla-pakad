@@ -509,6 +509,10 @@ class GameService {
           : teamBTens == 4;
       _setVictory(updates, winningTeam, game, updates,
           allFourTens: allFourTens);
+      final victoryType =
+          VictoryType.fromString(updates['victoryType'] as String?);
+      updates['teamStats'] =
+          _buildTeamStatsUpdate(game, winningTeam, victoryType);
       updates['status'] = GameStatus.completed.name;
       // Auto-confirm bots for next game
       for (final p in game.players) {
@@ -541,6 +545,22 @@ class GameService {
           ? VictoryType.court.name
           : VictoryType.poopy.name;
     }
+  }
+
+  Map<String, dynamic> _buildTeamStatsUpdate(
+    GameState game,
+    String winningTeam,
+    VictoryType? victoryType,
+  ) {
+    final stats = Map<String, TeamStats>.from(game.teamStats);
+    final loserTeam = winningTeam == 'teamA' ? 'teamB' : 'teamA';
+
+    stats[winningTeam] = (stats[winningTeam] ?? const TeamStats())
+        .applyResult(won: true, type: victoryType);
+    stats[loserTeam] = (stats[loserTeam] ?? const TeamStats())
+        .applyResult(won: false, type: victoryType);
+
+    return {for (final e in stats.entries) e.key: e.value.toMap()};
   }
 
   TrickPlay _findTrickWinner(
@@ -640,6 +660,10 @@ class GameService {
           tens.values.where((t) => t == winningTeam).length;
       _setVictory(updates, winningTeam, game, updates,
           allFourTens: tensForWinner == 4);
+      final victoryType =
+          VictoryType.fromString(updates['victoryType'] as String?);
+      updates['teamStats'] =
+          _buildTeamStatsUpdate(game, winningTeam, victoryType);
 
       for (final p in game.players) {
         if (p.isBot) updates['seats.${p.seat}.ready'] = true;
