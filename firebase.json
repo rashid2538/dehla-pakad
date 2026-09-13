@@ -28,8 +28,12 @@
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "headers": [
       {
-        "source": "**/*.@(jpg|jpeg|gif|png|svg|webp)",
+        "source": "/assets/**/*.@(jpg|jpeg|gif|png|svg|webp)",
         "headers": [{ "key": "Cache-Control", "value": "max-age=604800" }]
+      },
+      {
+        "source": "/pwa/**",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       }
     ]
   }
