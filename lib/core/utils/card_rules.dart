@@ -3,7 +3,8 @@ import 'dart:math';
 import '../models/playing_card.dart';
 import '../models/game_state.dart';
 
-export '../models/game_state.dart' show VictoryType, TrickPlay, CurrentTrick, CollectedTens;
+export '../models/game_state.dart'
+    show VictoryType, TrickPlay, CurrentTrick, CollectedTens;
 
 int nextSeat(int seat) => seat % 4 + 1;
 
@@ -23,15 +24,43 @@ List<PlayingCard> getLegalCards(List<PlayingCard> hand, Suit? leadSuit) {
   return suited.isEmpty ? List.of(hand) : suited;
 }
 
+/// Orders a hand for display: suits grouped, high to low within a suit, and
+/// suits alternating red/black so two same-colour suits only sit side by
+/// side when the suits held leave no other choice (e.g. only ♥ and ♦).
+List<PlayingCard> sortHandForDisplay(List<PlayingCard> hand) {
+  bool isRed(Suit s) => s == Suit.hearts || s == Suit.diamonds;
+  final held = Suit.values.where((s) => hand.any((c) => c.suit == s));
+  final black = held.where((s) => !isRed(s)).toList();
+  final red = held.where(isRed).toList();
+  final (more, fewer) = black.length >= red.length
+      ? (black, red)
+      : (red, black);
+  final order = [
+    for (var i = 0; i < more.length; i++) ...[
+      more[i],
+      if (i < fewer.length) fewer[i],
+    ],
+  ];
+  return List.of(hand)..sort((a, b) {
+    final bySuit = order.indexOf(a.suit).compareTo(order.indexOf(b.suit));
+    return bySuit != 0 ? bySuit : b.rank.value.compareTo(a.rank.value);
+  });
+}
+
 TrickPlay trickWinner(List<TrickPlay> plays, Suit leadSuit, Suit? trumpSuit) {
   assert(plays.isNotEmpty);
-  final trumpPlays =
-      trumpSuit == null ? <TrickPlay>[] : plays.where((p) => p.card.suit == trumpSuit).toList();
+  final trumpPlays = trumpSuit == null
+      ? <TrickPlay>[]
+      : plays.where((p) => p.card.suit == trumpSuit).toList();
   if (trumpPlays.isNotEmpty) {
-    return trumpPlays.reduce((a, b) => a.card.rank.value >= b.card.rank.value ? a : b);
+    return trumpPlays.reduce(
+      (a, b) => a.card.rank.value >= b.card.rank.value ? a : b,
+    );
   }
   final leadPlays = plays.where((p) => p.card.suit == leadSuit).toList();
-  return leadPlays.reduce((a, b) => a.card.rank.value >= b.card.rank.value ? a : b);
+  return leadPlays.reduce(
+    (a, b) => a.card.rank.value >= b.card.rank.value ? a : b,
+  );
 }
 
 /// Returns winningTeam or null if game isn't over yet.
@@ -51,10 +80,15 @@ TrickPlay trickWinner(List<TrickPlay> plays, Suit leadSuit, Suit? trumpSuit) {
 
   // All 13 tricks played — no draws
   if (teamATens != teamBTens) {
-    return (winningTeam: teamATens > teamBTens ? 'teamA' : 'teamB', immediate: false);
+    return (
+      winningTeam: teamATens > teamBTens ? 'teamA' : 'teamB',
+      immediate: false,
+    );
   }
   // 2-2 split: more tricks wins (13 is odd, always a winner)
-  final winner = (trickCounts['teamA'] ?? 0) > (trickCounts['teamB'] ?? 0) ? 'teamA' : 'teamB';
+  final winner = (trickCounts['teamA'] ?? 0) > (trickCounts['teamB'] ?? 0)
+      ? 'teamA'
+      : 'teamB';
   return (winningTeam: winner, immediate: false);
 }
 
@@ -95,15 +129,21 @@ String teamLabel(String team) => team.replaceAll('team', 'Team ');
     if (teamATens != teamBTens) {
       final t = teamATens > teamBTens ? 'teamA' : 'teamB';
       final hi = teamATens > teamBTens ? teamATens : teamBTens;
-      return win(t, 'All four 10s are in and ${teamLabel(t)} took $hi of '
-          'them ($teamATens–$teamBTens).');
+      return win(
+        t,
+        'All four 10s are in and ${teamLabel(t)} took $hi of '
+        'them ($teamATens–$teamBTens).',
+      );
     }
     // 2-2 split: whoever reaches 7 tricks has an unbeatable majority of 13.
     if (tricksA >= 7 || tricksB >= 7) {
       final t = tricksA >= 7 ? 'teamA' : 'teamB';
       final n = tricksA >= 7 ? tricksA : tricksB;
-      return win(t, '10s split 2–2, so tricks decide — ${teamLabel(t)} took '
-          '$n of 13, an unbeatable majority.');
+      return win(
+        t,
+        '10s split 2–2, so tricks decide — ${teamLabel(t)} took '
+        '$n of 13, an unbeatable majority.',
+      );
     }
   }
 
@@ -111,12 +151,18 @@ String teamLabel(String team) => team.replaceAll('team', 'Team ');
   if (totalTricks >= 13) {
     if (teamATens != teamBTens) {
       final t = teamATens > teamBTens ? 'teamA' : 'teamB';
-      return win(t, 'All 13 tricks played — ${teamLabel(t)} collected more '
-          '10s ($teamATens–$teamBTens).');
+      return win(
+        t,
+        'All 13 tricks played — ${teamLabel(t)} collected more '
+        '10s ($teamATens–$teamBTens).',
+      );
     }
     final t = tricksA > tricksB ? 'teamA' : 'teamB';
-    return win(t, 'All 13 tricks played — 10s split 2–2, so the trick '
-        'majority ($tricksA–$tricksB) decides.');
+    return win(
+      t,
+      'All 13 tricks played — 10s split 2–2, so the trick '
+      'majority ($tricksA–$tricksB) decides.',
+    );
   }
 
   return (team: null, reason: null);
@@ -181,8 +227,16 @@ List<PlayingCard> shuffleDeck() {
   return deck;
 }
 
-Map<int, List<PlayingCard>> dealCards(List<PlayingCard> deck, int startingSeat) {
-  final hands = {1: <PlayingCard>[], 2: <PlayingCard>[], 3: <PlayingCard>[], 4: <PlayingCard>[]};
+Map<int, List<PlayingCard>> dealCards(
+  List<PlayingCard> deck,
+  int startingSeat,
+) {
+  final hands = {
+    1: <PlayingCard>[],
+    2: <PlayingCard>[],
+    3: <PlayingCard>[],
+    4: <PlayingCard>[],
+  };
   var seat = startingSeat;
   for (final card in deck) {
     hands[seat]!.add(card);

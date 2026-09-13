@@ -10,7 +10,8 @@ import '../../core/models/playing_card.dart';
 import '../../core/services/audio_service.dart';
 import '../../core/services/anti_cheat.dart';
 import '../../core/theme.dart';
-import '../../core/utils/card_rules.dart' show canClaimRemaining, getLegalCards, unseenCards;
+import '../../core/utils/card_rules.dart'
+    show canClaimRemaining, getLegalCards, sortHandForDisplay, unseenCards;
 import '../../shared_widgets/playing_card_widget.dart';
 
 /// Shared game table UI that works with any [GameSession] backend.
@@ -274,13 +275,9 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
     // Game completed
     if (prev.status != GameStatus.completed &&
         game.status == GameStatus.completed) {
+      // Victory/defeat sound plays on the result screen, which owns the
+      // end-of-game feedback; playing it here too doubled it.
       _session.publishFinalHands(_session.myUid);
-      if (game.winningTeam == myTeam) {
-        AudioService.instance.play(GameSound.victory);
-        HapticService.heavy();
-      } else {
-        AudioService.instance.play(GameSound.defeat);
-      }
     }
   }
 
@@ -289,7 +286,8 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
     _resolvingTrick = true;
     final plays = game.currentTrick?.plays ?? const [];
     final allBotTrick =
-        plays.isNotEmpty && plays.every((p) => game.seats[p.seat]?.isBot == true);
+        plays.isNotEmpty &&
+        plays.every((p) => game.seats[p.seat]?.isBot == true);
     final delay = isTransition ? (allBotTrick ? 200 : 600) : 100;
     Future.delayed(Duration(milliseconds: delay), () {
       _resolvingTrick = false;
@@ -352,8 +350,7 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
                         Column(
                           children: [
                             _buildInfoRail(game, mySeat),
-                            if (_lastTrickPlays != null)
-                              _buildLastTrickBar(),
+                            if (_lastTrickPlays != null) _buildLastTrickBar(),
                             Expanded(
                               child: _buildTable(
                                 game,
@@ -389,42 +386,43 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
       left: 0,
       right: 0,
       child: Center(
-        child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 12,
-              ),
-              decoration: BoxDecoration(
-                color: AppColors.maroonDark.withValues(alpha: 0.95),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.gold, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.gold.withValues(alpha: 0.3),
-                    blurRadius: 20,
-                    spreadRadius: 4,
+        child:
+            Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
                   ),
-                ],
-              ),
-              child: Text(
-                '${suit.symbol} Trump is ${suit.name}!',
-                style: TextStyle(
-                  color: (suit == Suit.hearts || suit == Suit.diamonds)
-                      ? AppColors.suitRed
-                      : AppColors.ivory,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
+                  decoration: BoxDecoration(
+                    color: AppColors.maroonDark.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.gold, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.gold.withValues(alpha: 0.3),
+                        blurRadius: 20,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '${suit.symbol} Trump is ${suit.name}!',
+                    style: TextStyle(
+                      color: (suit == Suit.hearts || suit == Suit.diamonds)
+                          ? AppColors.suitRed
+                          : AppColors.ivory,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+                .animate()
+                .fadeIn(duration: 200.ms)
+                .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1))
+                .then()
+                .shimmer(
+                  duration: 600.ms,
+                  color: AppColors.gold.withValues(alpha: 0.3),
                 ),
-              ),
-            )
-            .animate()
-            .fadeIn(duration: 200.ms)
-            .scale(begin: const Offset(0.8, 0.8), end: const Offset(1, 1))
-            .then()
-            .shimmer(
-              duration: 600.ms,
-              color: AppColors.gold.withValues(alpha: 0.3),
-            ),
       ),
     );
   }
@@ -472,32 +470,33 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
       left: 0,
       right: 0,
       child: Center(
-        child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 10,
-              ),
-              decoration: BoxDecoration(
-                color: AppColors.maroonDark.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isTeamA ? AppColors.teamA : AppColors.teamB,
-                ),
-              ),
-              child: Text(
-                '10${suit.symbol} collected by ${isTeamA ? "Team A" : "Team B"}!',
-                style: TextStyle(
-                  color: isTeamA ? AppColors.teamA : AppColors.teamB,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            )
-            .animate()
-            .fadeIn(duration: 200.ms)
-            .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1))
-            .then()
-            .fadeOut(delay: 800.ms),
+        child:
+            Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.maroonDark.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isTeamA ? AppColors.teamA : AppColors.teamB,
+                    ),
+                  ),
+                  child: Text(
+                    '10${suit.symbol} collected by ${isTeamA ? "Team A" : "Team B"}!',
+                    style: TextStyle(
+                      color: isTeamA ? AppColors.teamA : AppColors.teamB,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+                .animate()
+                .fadeIn(duration: 200.ms)
+                .scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1))
+                .then()
+                .fadeOut(delay: 800.ms),
       ),
     );
   }
@@ -546,9 +545,9 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
                     : 'No Trump',
                 color: game.trumpSuit != null
                     ? ((game.trumpSuit == Suit.hearts ||
-                            game.trumpSuit == Suit.diamonds)
-                        ? AppColors.suitRed
-                        : AppColors.gold)
+                              game.trumpSuit == Suit.diamonds)
+                          ? AppColors.suitRed
+                          : AppColors.gold)
                     : AppColors.silver,
               ),
               const Spacer(),
@@ -586,14 +585,11 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
               // Partner info
               Expanded(
                 child: Text(
-                  partner != null
-                      ? 'Partner: ${partner.displayName}'
-                      : '',
+                  partner != null ? 'Partner: ${partner.displayName}' : '',
                   style: TextStyle(
-                    color: (myTeam == 'teamA'
-                            ? AppColors.teamA
-                            : AppColors.teamB)
-                        .withValues(alpha: 0.6),
+                    color:
+                        (myTeam == 'teamA' ? AppColors.teamA : AppColors.teamB)
+                            .withValues(alpha: 0.6),
                     fontSize: 10,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -690,8 +686,10 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.maroonDark,
-        title: const Text('Quit Game?',
-            style: TextStyle(color: AppColors.gold)),
+        title: const Text(
+          'Quit Game?',
+          style: TextStyle(color: AppColors.gold),
+        ),
         content: const Text(
           'Leave this game and return to the menu?',
           style: TextStyle(color: AppColors.ivory),
@@ -699,8 +697,10 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child:
-                const Text('Stay', style: TextStyle(color: AppColors.silver)),
+            child: const Text(
+              'Stay',
+              style: TextStyle(color: AppColors.silver),
+            ),
           ),
           TextButton(
             onPressed: () {
@@ -708,8 +708,7 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
               _session.dispose();
               context.go('/');
             },
-            child:
-                const Text('Quit', style: TextStyle(color: AppColors.error)),
+            child: const Text('Quit', style: TextStyle(color: AppColors.error)),
           ),
         ],
       ),
@@ -748,42 +747,46 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       color: AppColors.maroonDark.withValues(alpha: 0.5),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text(
-            'Last: ',
-            style: TextStyle(color: AppColors.silver, fontSize: 11),
-          ),
-          for (final p in plays)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: Text(
-                '${p.card.rank.symbol}${p.card.suit.symbol}',
-                style: TextStyle(
-                  color: p.seat == _trickWinnerSeat
-                      ? (p.card.suit == Suit.hearts ||
-                              p.card.suit == Suit.diamonds)
-                          ? AppColors.suitRed
-                          : AppColors.ivory
-                      : AppColors.silver,
-                  fontSize: 12,
-                  fontWeight: p.seat == _trickWinnerSeat
-                      ? FontWeight.bold
-                      : FontWeight.normal,
+      // Long player names would overflow narrow screens; shrink instead.
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Last: ',
+              style: TextStyle(color: AppColors.silver, fontSize: 11),
+            ),
+            for (final p in plays)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Text(
+                  '${p.card.rank.symbol}${p.card.suit.symbol}',
+                  style: TextStyle(
+                    color: p.seat == _trickWinnerSeat
+                        ? (p.card.suit == Suit.hearts ||
+                                  p.card.suit == Suit.diamonds)
+                              ? AppColors.suitRed
+                              : AppColors.ivory
+                        : AppColors.silver,
+                    fontSize: 12,
+                    fontWeight: p.seat == _trickWinnerSeat
+                        ? FontWeight.bold
+                        : FontWeight.normal,
+                  ),
                 ),
               ),
+            const SizedBox(width: 6),
+            Text(
+              '→ $_lastTrickWinnerName',
+              style: const TextStyle(
+                color: AppColors.gold,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          const SizedBox(width: 6),
-          Text(
-            '→ $_lastTrickWinnerName',
-            style: const TextStyle(
-              color: AppColors.gold,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -843,7 +846,8 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
   ) {
     final player = game.seats[seat];
     final isActive = game.currentTurnSeat == seat;
-    final hasPlayed = game.currentTrick?.plays.any((p) => p.seat == seat) ?? false;
+    final hasPlayed =
+        game.currentTrick?.plays.any((p) => p.seat == seat) ?? false;
     final cardCount = 13 - game.trickNumber + 1 - (hasPlayed ? 1 : 0);
     final teamColor = GameState.teamForSeat(seat) == 'teamA'
         ? AppColors.teamA
@@ -860,7 +864,9 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: isActive ? AppColors.gold : teamColor.withValues(alpha: 0.4),
+              color: isActive
+                  ? AppColors.gold
+                  : teamColor.withValues(alpha: 0.4),
               width: isActive ? 2 : 1,
             ),
             color: isActive
@@ -931,18 +937,19 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
               if (player?.isBot == true && isActive)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                        'thinking...',
-                        style: TextStyle(
-                          color: AppColors.gold.withValues(alpha: 0.6),
-                          fontSize: 9,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      )
-                      .animate(onPlay: (c) => c.repeat())
-                      .fadeIn(duration: 600.ms)
-                      .then()
-                      .fadeOut(duration: 600.ms),
+                  child:
+                      Text(
+                            'thinking...',
+                            style: TextStyle(
+                              color: AppColors.gold.withValues(alpha: 0.6),
+                              fontSize: 9,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          )
+                          .animate(onPlay: (c) => c.repeat())
+                          .fadeIn(duration: 600.ms)
+                          .then()
+                          .fadeOut(duration: 600.ms),
                 ),
               const SizedBox(height: 4),
               // Card count (big number) + stack
@@ -960,9 +967,7 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
                           Positioned(
                             left: i * 4.0,
                             top: i * 1.5,
-                            child: PlayingCardWidget(
-                              width: cardW * 0.45,
-                            ),
+                            child: PlayingCardWidget(width: cardW * 0.45),
                           ),
                       ],
                     ),
@@ -1030,12 +1035,12 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
                       1,
                     )
                     ..rotateZ(-0.08 + i * 0.02),
-                  child: PlayingCardWidget(
-                    width: cardW * 0.55,
-                  ).animate().fadeIn(
-                    delay: Duration(milliseconds: i * 50),
-                    duration: 200.ms,
-                  ),
+                  child: PlayingCardWidget(width: cardW * 0.55)
+                      .animate()
+                      .fadeIn(
+                        delay: Duration(milliseconds: i * 50),
+                        duration: 200.ms,
+                      ),
                 ),
               ),
           // Lead-suit watermark glow
@@ -1069,7 +1074,8 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
                         game.leadSuit!.symbol,
                         style: TextStyle(
                           fontSize: centerSize * 0.15,
-                          color: (game.leadSuit == Suit.hearts ||
+                          color:
+                              (game.leadSuit == Suit.hearts ||
                                   game.leadSuit == Suit.diamonds)
                               ? AppColors.suitRed.withValues(alpha: 0.25)
                               : AppColors.ivory.withValues(alpha: 0.15),
@@ -1091,22 +1097,25 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
                 return Center(
                   child: Transform.translate(
                     offset: to,
-                    child: PlayingCardWidget(
-                            card: trick.plays[i].card, width: cardW * 0.9)
-                        .animate()
-                        .moveX(
-                          begin: dx,
-                          end: 0,
-                          duration: 300.ms,
-                          curve: Curves.easeOutCubic,
-                        )
-                        .moveY(
-                          begin: dy,
-                          end: 0,
-                          duration: 300.ms,
-                          curve: Curves.easeOutCubic,
-                        )
-                        .fadeIn(duration: 150.ms),
+                    child:
+                        PlayingCardWidget(
+                              card: trick.plays[i].card,
+                              width: cardW * 0.9,
+                            )
+                            .animate()
+                            .moveX(
+                              begin: dx,
+                              end: 0,
+                              duration: 300.ms,
+                              curve: Curves.easeOutCubic,
+                            )
+                            .moveY(
+                              begin: dy,
+                              end: 0,
+                              duration: 300.ms,
+                              curve: Curves.easeOutCubic,
+                            )
+                            .fadeIn(duration: 150.ms),
                   ),
                 );
               }(),
@@ -1123,11 +1132,7 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
     int mySeat,
     bool isMyTurn,
   ) {
-    final sorted = List.of(hand)
-      ..sort((a, b) {
-        final suitCmp = a.suit.index.compareTo(b.suit.index);
-        return suitCmp != 0 ? suitCmp : b.rank.value.compareTo(a.rank.value);
-      });
+    final sorted = sortHandForDisplay(hand);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
@@ -1174,7 +1179,10 @@ class _LocalGameTableScreenState extends State<LocalGameTableScreen>
           final availW = constraints.maxWidth;
           // §4.2: Scale clamp up to ~120px, denser fanned fit
           const visibleFrac = 0.32;
-          final cardW = (availW / (1 + (n - 1) * visibleFrac)).clamp(40.0, 120.0);
+          final cardW = (availW / (1 + (n - 1) * visibleFrac)).clamp(
+            40.0,
+            120.0,
+          );
           final cardH = cardW * 1.4;
           final step = n > 1
               ? ((availW - cardW) / (n - 1)).clamp(0.0, cardW * 0.6)
@@ -1344,8 +1352,8 @@ class _TenIcon extends StatelessWidget {
     final teamColor = team == 'teamA'
         ? AppColors.teamA
         : team == 'teamB'
-            ? AppColors.teamB
-            : null;
+        ? AppColors.teamB
+        : null;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),

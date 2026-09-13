@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
@@ -9,7 +7,9 @@ import '../../core/models/game_state.dart';
 import '../../core/models/playing_card.dart';
 import '../../core/services/audio_service.dart';
 import '../../core/theme.dart';
+import '../../core/utils/card_rules.dart' show sortHandForDisplay;
 import '../../shared_widgets/playing_card_widget.dart';
+import '../../shared_widgets/result_overlays.dart';
 
 /// Result screen for local (vs bots) games.
 /// Mirrors GameResultScreen but works with a [GameSession] instead of Firestore.
@@ -25,6 +25,7 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
   late final GameSession _session;
   bool _confirmed = false;
   bool _soundPlayed = false;
+  bool _handsPublished = false;
 
   @override
   void initState() {
@@ -75,36 +76,40 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
               }
             }
 
-            _session.publishFinalHands(_session.myUid);
+            // Once only: publishing emits a new state, so calling it on every
+            // build looped forever and kept restarting the result animations.
+            if (!_handsPublished && game.status == GameStatus.completed) {
+              _handsPublished = true;
+              _session.publishFinalHands(_session.myUid);
+            }
 
-            final confirmedCount =
-                game.players.where((p) => p.ready).length;
+            final confirmedCount = game.players.where((p) => p.ready).length;
 
             return SafeArea(
               child: Stack(
                 children: [
-                  if (isWinner) _ConfettiOverlay(),
-                  if (!isWinner && game.victoryType == VictoryType.poopy)
-                    _PoopOverlay(),
                   SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const SizedBox(height: 8),
                         Text(
-                          isWinner
-                              ? switch (game.victoryType) {
-                                  VictoryType.court => '👑 Court Victory!',
-                                  VictoryType.poopy => '💥 Poopy Victory!',
-                                  _ => '🏆 Victory!',
-                                }
-                              : game.victoryType == VictoryType.poopy
+                              isWinner
+                                  ? switch (game.victoryType) {
+                                      VictoryType.court => '👑 Court Victory!',
+                                      VictoryType.poopy => '💥 Poopy Victory!',
+                                      _ => '🏆 Victory!',
+                                    }
+                                  : game.victoryType == VictoryType.poopy
                                   ? '💩 Poopy Defeat!'
                                   : '😞 Defeat!',
-                          style: Theme.of(context).textTheme.headlineLarge,
-                          textAlign: TextAlign.center,
-                        )
+                              style: Theme.of(context).textTheme.headlineLarge,
+                              textAlign: TextAlign.center,
+                            )
                             .animate()
                             .fadeIn(duration: 400.ms)
                             .scale(
@@ -126,16 +131,19 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                         ).animate().fadeIn(delay: 200.ms),
                         if (isWinner)
                           const Padding(
-                            padding: EdgeInsets.only(top: 4),
-                            child: Text(
-                              '🎉 You Won!',
-                              style: TextStyle(
-                                color: AppColors.gold,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ).animate().fadeIn(delay: 400.ms).shimmer(
+                                padding: EdgeInsets.only(top: 4),
+                                child: Text(
+                                  '🎉 You Won!',
+                                  style: TextStyle(
+                                    color: AppColors.gold,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              )
+                              .animate()
+                              .fadeIn(delay: 400.ms)
+                              .shimmer(
                                 duration: 800.ms,
                                 color: AppColors.gold.withValues(alpha: 0.3),
                               ),
@@ -144,10 +152,14 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                           Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: AppColors.maroonDark.withValues(alpha: 0.6),
+                              color: AppColors.maroonDark.withValues(
+                                alpha: 0.6,
+                              ),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: AppColors.burgundy.withValues(alpha: 0.4),
+                                color: AppColors.burgundy.withValues(
+                                  alpha: 0.4,
+                                ),
                               ),
                             ),
                             child: Text(
@@ -184,7 +196,9 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                                   context.go('/');
                                 },
                                 style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 16,
+                                  ),
                                 ),
                                 child: const Text('Leave'),
                               ),
@@ -192,13 +206,17 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                             const SizedBox(width: 12),
                             Expanded(
                               child: ElevatedButton(
-                                onPressed:
-                                    _confirmed ? null : () => _confirm(game),
+                                onPressed: _confirmed
+                                    ? null
+                                    : () => _confirm(game),
                                 style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 16,
+                                  ),
                                 ),
                                 child: Text(
-                                    _confirmed ? 'Waiting...' : 'Play Again'),
+                                  _confirmed ? 'Waiting...' : 'Play Again',
+                                ),
                               ),
                             ),
                           ],
@@ -210,7 +228,9 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                             child: ElevatedButton(
                               onPressed: () => _startNext(),
                               style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
                                 backgroundColor: AppColors.success,
                               ),
                               child: const Text('Start Next Game'),
@@ -221,6 +241,10 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                       ],
                     ),
                   ),
+                  // Overlays paint above the content; they ignore touches.
+                  if (isWinner) const ConfettiOverlay(),
+                  if (!isWinner && game.victoryType == VictoryType.poopy)
+                    const PoopOverlay(),
                 ],
               ),
             );
@@ -247,12 +271,14 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
                 _StatChip(
                   icon: Icons.card_travel,
                   label: game.trumpSuit?.symbol ?? '—',
-                  sublabel: game.trumpTeam?.replaceAll('team', 'Team ') ?? 'No trump',
+                  sublabel:
+                      game.trumpTeam?.replaceAll('team', 'Team ') ?? 'No trump',
                 ),
                 const SizedBox(width: 8),
                 _StatChip(
                   icon: Icons.style,
-                  label: '${game.trickPileA.trickCount}–${game.trickPileB.trickCount}',
+                  label:
+                      '${game.trickPileA.trickCount}–${game.trickPileB.trickCount}',
                   sublabel: 'Tricks',
                 ),
                 const SizedBox(width: 8),
@@ -324,10 +350,7 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
     final player = game.seats[seat]!;
     final team = GameState.teamForSeat(seat);
     final teamColor = team == 'teamA' ? AppColors.teamA : AppColors.teamB;
-    final cards = dealt.map(PlayingCard.fromId).toList()
-      ..sort((a, b) => a.suit.index != b.suit.index
-          ? a.suit.index - b.suit.index
-          : b.rank.value - a.rank.value);
+    final cards = sortHandForDisplay(dealt.map(PlayingCard.fromId).toList());
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -368,7 +391,10 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
           ),
           const SizedBox(height: 4),
           if (cards.isEmpty)
-            const Text('—', style: TextStyle(color: AppColors.silver, fontSize: 11))
+            const Text(
+              '—',
+              style: TextStyle(color: AppColors.silver, fontSize: 11),
+            )
           else
             Wrap(
               spacing: 2,
@@ -393,10 +419,7 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
       children: [
         Text(
           '$confirmedCount/4 ready for next game',
-          style: const TextStyle(
-            color: AppColors.silver,
-            fontSize: 13,
-          ),
+          style: const TextStyle(color: AppColors.silver, fontSize: 13),
         ),
         const SizedBox(height: 8),
         Row(
@@ -432,7 +455,9 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: player.ready ? AppColors.success : teamColor.withValues(alpha: 0.4),
+                  color: player.ready
+                      ? AppColors.success
+                      : teamColor.withValues(alpha: 0.4),
                   width: 2,
                 ),
               ),
@@ -451,7 +476,11 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
               const Positioned(
                 right: -2,
                 bottom: -2,
-                child: Icon(Icons.check_circle, color: AppColors.success, size: 14),
+                child: Icon(
+                  Icons.check_circle,
+                  color: AppColors.success,
+                  size: 14,
+                ),
               ),
           ],
         ),
@@ -474,142 +503,6 @@ class _LocalResultScreenState extends State<LocalResultScreen> {
 
   void _startNext() {
     _session.startNextGame(hostUid: _session.myUid);
-  }
-}
-
-// ── Overlays ──
-
-class _PoopOverlay extends StatelessWidget {
-  final _rng = Random();
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final poops = List.generate(18, (i) => (
-      x: _rng.nextDouble() * (size.width - 40),
-      y: _rng.nextDouble() * size.height * 0.6,
-      delay: _rng.nextInt(1200),
-      fs: 28.0 + _rng.nextInt(20),
-      slideDur: 2500 + _rng.nextInt(1500),
-    ));
-
-    return IgnorePointer(
-      child: SizedBox.expand(
-        child: Stack(
-          children: [
-            for (final p in poops)
-              Positioned(
-                left: p.x + p.fs * 0.15,
-                top: p.y + p.fs * 0.2,
-                child: Container(
-                  width: p.fs * 0.7,
-                  height: p.fs * 0.9,
-                  decoration: BoxDecoration(
-                    color: const Color(0x80654321),
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(p.fs * 0.2),
-                      topRight: Radius.circular(p.fs * 0.25),
-                      bottomLeft: Radius.circular(p.fs * 0.35),
-                      bottomRight: Radius.circular(p.fs * 0.3),
-                    ),
-                  ),
-                )
-                    .animate()
-                    .fadeIn(
-                      delay: Duration(milliseconds: p.delay + 1500),
-                      duration: 200.ms,
-                    )
-                    .then(delay: 5000.ms)
-                    .fadeOut(duration: 3000.ms),
-              ),
-            for (final p in poops)
-              Positioned(
-                left: p.x,
-                top: p.y,
-                child: Text('\u{1F4A9}', style: TextStyle(fontSize: p.fs))
-                    .animate()
-                    .scale(
-                      begin: const Offset(3, 3),
-                      end: const Offset(1, 1),
-                      duration: 300.ms,
-                      delay: Duration(milliseconds: p.delay),
-                      curve: Curves.bounceOut,
-                    )
-                    .fadeIn(
-                      duration: 100.ms,
-                      delay: Duration(milliseconds: p.delay),
-                    )
-                    .then(delay: 1200.ms)
-                    .moveY(
-                      begin: 0,
-                      end: size.height - p.y + 50,
-                      duration: Duration(milliseconds: p.slideDur),
-                      curve: Curves.easeIn,
-                    ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConfettiOverlay extends StatelessWidget {
-  final _rng = Random();
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final colors = [
-      AppColors.gold,
-      AppColors.goldLight,
-      AppColors.suitRed,
-      AppColors.ivory,
-      AppColors.silver,
-    ];
-
-    return IgnorePointer(
-      child: SizedBox.expand(
-        child: Stack(
-          children: List.generate(30, (i) {
-            final x = _rng.nextDouble() * size.width;
-            final delay = _rng.nextInt(800);
-            final dur = 1500 + _rng.nextInt(1000);
-            final color = colors[_rng.nextInt(colors.length)];
-            final rotAngle = _rng.nextDouble() * 6.28;
-            return Positioned(
-              left: x,
-              top: -20,
-              child: Container(
-                width: 8,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              )
-                  .animate()
-                  .moveY(
-                    begin: 0,
-                    end: size.height + 40,
-                    duration: Duration(milliseconds: dur),
-                    delay: Duration(milliseconds: delay),
-                    curve: Curves.easeIn,
-                  )
-                  .rotate(
-                    begin: 0,
-                    end: rotAngle,
-                    duration: Duration(milliseconds: dur),
-                  )
-                  .fadeOut(
-                    delay: Duration(milliseconds: dur - 300),
-                    duration: 300.ms,
-                  ),
-            );
-          }),
-        ),
-      ),
-    );
   }
 }
 
@@ -677,8 +570,8 @@ class _ResultTenIcon extends StatelessWidget {
     final teamColor = team == 'teamA'
         ? AppColors.teamA
         : team == 'teamB'
-            ? AppColors.teamB
-            : null;
+        ? AppColors.teamB
+        : null;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

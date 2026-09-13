@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -11,7 +9,9 @@ import '../../core/models/playing_card.dart';
 import '../../core/services/audio_service.dart';
 import '../../core/services/game_service.dart';
 import '../../core/theme.dart';
+import '../../core/utils/card_rules.dart' show sortHandForDisplay;
 import '../../shared_widgets/playing_card_widget.dart';
+import '../../shared_widgets/result_overlays.dart';
 
 class GameResultScreen extends ConsumerStatefulWidget {
   final String gameId;
@@ -63,7 +63,9 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
             }
 
             final mySeat = game.seatForUid(_uid);
-            final myTeam = mySeat != null ? GameState.teamForSeat(mySeat.seat) : null;
+            final myTeam = mySeat != null
+                ? GameState.teamForSeat(mySeat.seat)
+                : null;
             final isWinner = myTeam == game.winningTeam;
 
             if (!_handsPublished && game.status == GameStatus.completed) {
@@ -88,9 +90,6 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
             return SafeArea(
               child: Stack(
                 children: [
-                  if (isWinner) _ConfettiOverlay(),
-                  if (!isWinner && game.victoryType == VictoryType.poopy)
-                    _PoopOverlay(),
                   SingleChildScrollView(
                     padding: const EdgeInsets.all(24),
                     child: Column(
@@ -98,18 +97,18 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                       children: [
                         const SizedBox(height: 16),
                         Text(
-                          isWinner
-                              ? switch (game.victoryType) {
-                                  VictoryType.court => '👑 Court Victory!',
-                                  VictoryType.poopy => '💥 Poopy Victory!',
-                                  _ => '🏆 Victory!',
-                                }
-                              : game.victoryType == VictoryType.poopy
+                              isWinner
+                                  ? switch (game.victoryType) {
+                                      VictoryType.court => '👑 Court Victory!',
+                                      VictoryType.poopy => '💥 Poopy Victory!',
+                                      _ => '🏆 Victory!',
+                                    }
+                                  : game.victoryType == VictoryType.poopy
                                   ? '💩 Poopy Defeat!'
                                   : '😞 Defeat!',
-                          style: Theme.of(context).textTheme.headlineLarge,
-                          textAlign: TextAlign.center,
-                        )
+                              style: Theme.of(context).textTheme.headlineLarge,
+                              textAlign: TextAlign.center,
+                            )
                             .animate()
                             .fadeIn(duration: 400.ms)
                             .scale(
@@ -131,16 +130,19 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                         ).animate().fadeIn(delay: 200.ms),
                         if (isWinner)
                           const Padding(
-                            padding: EdgeInsets.only(top: 8),
-                            child: Text(
-                              '🎉 You Won!',
-                              style: TextStyle(
-                                color: AppColors.gold,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ).animate().fadeIn(delay: 400.ms).shimmer(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Text(
+                                  '🎉 You Won!',
+                                  style: TextStyle(
+                                    color: AppColors.gold,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              )
+                              .animate()
+                              .fadeIn(delay: 400.ms)
+                              .shimmer(
                                 duration: 800.ms,
                                 color: AppColors.gold.withValues(alpha: 0.3),
                               ),
@@ -179,7 +181,9 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                           children: [
                             for (int seat = 1; seat <= 4; seat++)
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                ),
                                 child: _buildConfirmChip(game, seat),
                               ),
                           ],
@@ -194,9 +198,12 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                             ),
                             const SizedBox(width: 16),
                             ElevatedButton(
-                              onPressed: _confirmed ? null : () => _confirm(game),
+                              onPressed: _confirmed
+                                  ? null
+                                  : () => _confirm(game),
                               child: Text(
-                                  _confirmed ? 'Waiting...' : 'Play Again'),
+                                _confirmed ? 'Waiting...' : 'Play Again',
+                              ),
                             ),
                           ],
                         ),
@@ -211,6 +218,10 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                       ],
                     ),
                   ),
+                  // Overlays paint above the content; they ignore touches.
+                  if (isWinner) const ConfettiOverlay(),
+                  if (!isWinner && game.victoryType == VictoryType.poopy)
+                    const PoopOverlay(),
                 ],
               ),
             );
@@ -227,8 +238,10 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
         child: Column(
           children: [
             _row('Trump', game.trumpSuit?.symbol ?? 'Never set'),
-            _row('Trump Team',
-                game.trumpTeam?.replaceAll('team', 'Team ') ?? '—'),
+            _row(
+              'Trump Team',
+              game.trumpTeam?.replaceAll('team', 'Team ') ?? '—',
+            ),
             _row(
               'Tricks',
               'A: ${game.trickPileA.trickCount}  B: ${game.trickPileB.trickCount}',
@@ -298,8 +311,8 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
                       color: team == 'teamA'
                           ? AppColors.teamA
                           : team == 'teamB'
-                              ? AppColors.teamB
-                              : AppColors.silver,
+                          ? AppColors.teamB
+                          : AppColors.silver,
                     ),
                   );
                 }(),
@@ -353,10 +366,7 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
   ) {
     final player = game.seats[seat]!;
     final team = GameState.teamForSeat(seat);
-    final cards = dealt.map(PlayingCard.fromId).toList()
-      ..sort((a, b) => a.suit.index != b.suit.index
-          ? a.suit.index - b.suit.index
-          : b.rank.value - a.rank.value);
+    final cards = sortHandForDisplay(dealt.map(PlayingCard.fromId).toList());
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -440,154 +450,12 @@ class _GameResultScreenState extends ConsumerState<GameResultScreen> {
 
   Future<void> _startNext() async {
     try {
-      await ref
-          .read(gameServiceProvider)
-          .startNextGame(widget.gameId, _uid);
+      await ref.read(gameServiceProvider).startNextGame(widget.gameId, _uid);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('$e')));
       }
     }
-  }
-}
-
-class _PoopOverlay extends StatelessWidget {
-  final _rng = Random();
-
-  _PoopOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final poops = List.generate(18, (i) => (
-      x: _rng.nextDouble() * (size.width - 40),
-      y: _rng.nextDouble() * size.height * 0.6,
-      delay: _rng.nextInt(1200),
-      fs: 28.0 + _rng.nextInt(20),
-      slideDur: 2500 + _rng.nextInt(1500),
-    ));
-
-    return IgnorePointer(
-      child: SizedBox.expand(
-        child: Stack(
-          children: [
-            // Residue smudges — appear when poop unsticks, fade slowly
-            for (final p in poops)
-              Positioned(
-                left: p.x + p.fs * 0.15,
-                top: p.y + p.fs * 0.2,
-                child: Container(
-                  width: p.fs * 0.7,
-                  height: p.fs * 0.9,
-                  decoration: BoxDecoration(
-                    color: const Color(0x80654321),
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(p.fs * 0.2),
-                      topRight: Radius.circular(p.fs * 0.25),
-                      bottomLeft: Radius.circular(p.fs * 0.35),
-                      bottomRight: Radius.circular(p.fs * 0.3),
-                    ),
-                  ),
-                )
-                    .animate()
-                    .fadeIn(
-                      delay: Duration(milliseconds: p.delay + 1500),
-                      duration: 200.ms,
-                    )
-                    .then(delay: 5000.ms)
-                    .fadeOut(duration: 3000.ms),
-              ),
-            // Poops: splat → stick → slide down
-            for (final p in poops)
-              Positioned(
-                left: p.x,
-                top: p.y,
-                child: Text('\u{1F4A9}', style: TextStyle(fontSize: p.fs))
-                    .animate()
-                    .scale(
-                      begin: const Offset(3, 3),
-                      end: const Offset(1, 1),
-                      duration: 300.ms,
-                      delay: Duration(milliseconds: p.delay),
-                      curve: Curves.bounceOut,
-                    )
-                    .fadeIn(
-                      duration: 100.ms,
-                      delay: Duration(milliseconds: p.delay),
-                    )
-                    .then(delay: 1200.ms)
-                    .moveY(
-                      begin: 0,
-                      end: size.height - p.y + 50,
-                      duration: Duration(milliseconds: p.slideDur),
-                      curve: Curves.easeIn,
-                    ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConfettiOverlay extends StatelessWidget {
-  final _rng = Random();
-
-  _ConfettiOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final colors = [
-      AppColors.gold,
-      AppColors.goldLight,
-      AppColors.suitRed,
-      AppColors.ivory,
-      AppColors.silver,
-    ];
-
-    return IgnorePointer(
-      child: SizedBox.expand(
-        child: Stack(
-          children: List.generate(30, (i) {
-            final x = _rng.nextDouble() * size.width;
-            final delay = _rng.nextInt(800);
-            final dur = 1500 + _rng.nextInt(1000);
-            final color = colors[_rng.nextInt(colors.length)];
-            final rotAngle = _rng.nextDouble() * 6.28;
-            return Positioned(
-              left: x,
-              top: -20,
-              child: Container(
-                width: 8,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              )
-                  .animate()
-                  .moveY(
-                    begin: 0,
-                    end: size.height + 40,
-                    duration: Duration(milliseconds: dur),
-                    delay: Duration(milliseconds: delay),
-                    curve: Curves.easeIn,
-                  )
-                  .rotate(
-                    begin: 0,
-                    end: rotAngle,
-                    duration: Duration(milliseconds: dur),
-                  )
-                  .fadeOut(
-                    delay: Duration(milliseconds: dur - 300),
-                    duration: 300.ms,
-                  ),
-            );
-          }),
-        ),
-      ),
-    );
   }
 }
