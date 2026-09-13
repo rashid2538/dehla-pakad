@@ -22,7 +22,8 @@ void main() {
   Set<String> renderedFaceUpIds(WidgetTester tester) {
     final ids = <String>{};
     for (final w in tester.widgetList<PlayingCardWidget>(
-        find.byType(PlayingCardWidget))) {
+      find.byType(PlayingCardWidget),
+    )) {
       if (w.card != null) ids.add(w.card!.id);
     }
     return ids;
@@ -31,9 +32,7 @@ void main() {
   /// Drives a fresh game until trick 2 has one card on the table. Returns
   /// the 4 trick-1 card ids, or null if the game ended before inspection
   /// (random all-4-tens finishes in the first 2 tricks).
-  Future<List<String>?> driveToInspection(
-    WidgetTester tester,
-  ) async {
+  Future<List<String>?> driveToInspection(WidgetTester tester) async {
     final session = LocalGameSession(
       myUid: 'local_human',
       mySeat: 1,
@@ -45,8 +44,9 @@ void main() {
       List<String>? trick1Ids;
 
       session.gameStream.listen((g) => state = g);
-      session.handStream
-          .listen((h) => myHand = h.map(PlayingCard.fromId).toList());
+      session.handStream.listen(
+        (h) => myHand = h.map(PlayingCard.fromId).toList(),
+      );
       session.start();
       await tester.pumpWidget(
         MaterialApp(home: LocalGameTableScreen(session: session)),
@@ -79,32 +79,39 @@ void main() {
         // the correct table (new trick visible, old trick gone). The UI lags
         // the broadcast stream by a frame or two, but the BUG under test is
         // persistence: previous trick cards never clearing.
-        if (g.trickNumber == 2 && plays == 1) {
+        // `>= 1`, not `== 1`: two bots in a row can both play inside one
+        // 550ms poll, skipping the one-card moment and running the game to
+        // its end screen (which needs a GoRouter this harness lacks).
+        if (g.trickNumber == 2 && plays >= 1) {
           var cleared = false;
           List<String>? lastOld;
           Set<String>? lastCenter;
           for (var i = 0; i < 30 && !cleared; i++) {
             await tester.pump(const Duration(milliseconds: 50));
             final eff = state!;
-            lastCenter = eff.currentTrick!.plays
-                .map((p) => p.card.id)
-                .toSet();
+            lastCenter = eff.currentTrick!.plays.map((p) => p.card.id).toSet();
             lastOld = trick1Ids;
             final r = renderedFaceUpIds(tester);
-            cleared = r.isNotEmpty &&
+            cleared =
+                r.isNotEmpty &&
                 r.containsAll(lastCenter) &&
                 r.intersection(lastOld!.toSet()).isEmpty;
           }
-          expect(cleared, isTrue,
-              reason: 'previous trick cards never cleared after the new '
-                  'trick started: rendered ${renderedFaceUpIds(tester)}, '
-                  'trick2 plays=$lastCenter, old trick=$lastOld');
+          expect(
+            cleared,
+            isTrue,
+            reason:
+                'previous trick cards never cleared after the new '
+                'trick started: rendered ${renderedFaceUpIds(tester)}, '
+                'trick2 plays=$lastCenter, old trick=$lastOld',
+          );
           return trick1Ids;
         }
 
         if (g.currentTurnSeat == session.mySeat) {
-          final lead =
-              g.currentTrick?.plays.isEmpty == true ? null : g.leadSuit;
+          final lead = g.currentTrick?.plays.isEmpty == true
+              ? null
+              : g.leadSuit;
           final legal = getLegalCards(myHand, lead);
           expect(legal, isNotEmpty);
           await session.playCard(session.mySeat, legal.first.id);
@@ -114,18 +121,19 @@ void main() {
         }
       }
     } finally {
-      // Flush the screen's overlay timers (trump banner etc.) and the
-      // session's resolve timer before teardown.
-      await tester.pump(const Duration(seconds: 3));
+      // Freeze the game first — otherwise bots keep playing during the flush
+      // and start fresh timers — then flush the screen's overlay delays
+      // (up to 2s) and the session's 600ms resolve timer.
       session.dispose();
-      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(seconds: 3));
       await tester.pumpWidget(const SizedBox());
     }
     return null;
   }
 
-  testWidgets('previous trick cards vanish when the next trick starts',
-      (tester) async {
+  testWidgets('previous trick cards vanish when the next trick starts', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -134,7 +142,9 @@ void main() {
       final result = await driveToInspection(tester);
       if (result != null) return; // inspected successfully
     }
-    fail('game completed before trick 2 across 5 random deals; '
-        'no inspection performed');
+    fail(
+      'game completed before trick 2 across 5 random deals; '
+      'no inspection performed',
+    );
   });
 }

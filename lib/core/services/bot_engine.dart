@@ -22,14 +22,63 @@ class BotMemory {
   }
 
   void reset() {
-    for (final s in knownVoidSuits.values) {
-      s.clear();
+    for (final suits in knownVoidSuits.values) {
+      suits.clear();
     }
     playHistory.clear();
   }
 
   Set<String> get allPlayedCardIds =>
-      playHistory.map((p) => p.card.id).toSet();
+      playHistory.map((play) => play.card.id).toSet();
+}
+
+class BotFactorScore {
+  final String factor;
+  final double contribution;
+  final String reason;
+
+  const BotFactorScore({
+    required this.factor,
+    required this.contribution,
+    required this.reason,
+  });
+}
+
+class BotCardEvaluation {
+  final PlayingCard card;
+  final double totalScore;
+  final List<BotFactorScore> breakdown;
+
+  const BotCardEvaluation({
+    required this.card,
+    required this.totalScore,
+    required this.breakdown,
+  });
+}
+
+class BotDecision {
+  final BotCardEvaluation selected;
+  final List<BotCardEvaluation> evaluations;
+
+  const BotDecision({required this.selected, required this.evaluations});
+
+  PlayingCard get card => selected.card;
+
+  String get trace {
+    final factors = [...selected.breakdown]
+      ..sort((a, b) => b.contribution.abs().compareTo(a.contribution.abs()));
+    final topFactors = factors.take(3);
+    final buffer = StringBuffer('Selected: ${selected.card.id}\n\nReason:\n');
+    for (final factor in topFactors) {
+      final sign = factor.contribution >= 0 ? '+' : '';
+      buffer.writeln(
+        '- ${factor.reason} (${factor.factor}: '
+        '$sign${factor.contribution.toStringAsFixed(2)})',
+      );
+    }
+    buffer.write('Total score: ${selected.totalScore.toStringAsFixed(2)}');
+    return buffer.toString();
+  }
 }
 
 String chooseBotCard({
@@ -38,6 +87,26 @@ String chooseBotCard({
   required int botSeat,
   BotDifficulty difficulty = BotDifficulty.medium,
   BotMemory? memory,
+  Random? random,
+  void Function(String trace)? debugLog,
+}) => evaluateBotDecision(
+  hand: hand,
+  gameState: gameState,
+  botSeat: botSeat,
+  difficulty: difficulty,
+  memory: memory,
+  random: random,
+  debugLog: debugLog,
+).card.id;
+
+BotDecision evaluateBotDecision({
+  required List<String> hand,
+  required GameState gameState,
+  required int botSeat,
+  BotDifficulty difficulty = BotDifficulty.medium,
+  BotMemory? memory,
+  Random? random,
+  void Function(String trace)? debugLog,
 }) {
   final cards = hand.map(PlayingCard.fromId).toList();
   final trick = gameState.currentTrick;
@@ -45,719 +114,1104 @@ String chooseBotCard({
   final leadSuit = isLeading
       ? null
       : (gameState.leadSuit ?? trick.plays.first.card.suit);
-  final legal = getLegalCards(cards, leadSuit);
+  final legalCards = getLegalCards(cards, leadSuit);
 
-  if (legal.length == 1) return legal.first.id;
+  if (legalCards.length == 1) {
+    final evaluation = BotCardEvaluation(
+      card: legalCards.single,
+      totalScore: 0,
+      breakdown: const [
+        BotFactorScore(
+          factor: 'forced_move',
+          contribution: 0,
+          reason: 'Only one legal card is available.',
+        ),
+      ],
+    );
+    final decision = BotDecision(
+      selected: evaluation,
+      evaluations: [evaluation],
+    );
+    debugLog?.call(decision.trace);
+    return decision;
+  }
 
-  final botTeam = GameState.teamForSeat(botSeat);
-  final trumpSuit = gameState.trumpSuit;
-  final ctx = _BotContext(
+  final context = _DecisionContext(
     botSeat: botSeat,
-    botTeam: botTeam,
-    trumpSuit: trumpSuit,
-    trumpEstablished: trumpSuit != null,
-    trickNumber: gameState.trickNumber,
+    botTeam: GameState.teamForSeat(botSeat),
     trick: trick,
     leadSuit: leadSuit,
+    trumpSuit: gameState.trumpSuit,
+    trickNumber: gameState.trickNumber,
     collectedTens: gameState.collectedTens,
     trickPileA: gameState.trickPileA,
     trickPileB: gameState.trickPileB,
     memory: memory ?? BotMemory(),
     allCards: cards,
+    legalCards: legalCards,
+    difficulty: difficulty,
   );
+  final weights = _BotWeights.forDifficulty(difficulty);
+  final candidates = _trumpEstablishingCandidates(context);
+  final rng = random ?? Random();
+  final simulated = weights.simulationSamples > 0
+      ? _simulateCandidates(
+          candidates: candidates,
+          game: gameState,
+          context: context,
+          samples: weights.simulationSamples,
+          random: rng,
+        )
+      : const <PlayingCard, double>{};
+  final evaluations =
+      candidates
+          .map(
+            (card) => _evaluateCard(
+              card: card,
+              context: context,
+              weights: weights,
+              random: rng,
+              simulated: simulated[card],
+            ),
+          )
+          .toList()
+        ..sort(_compareEvaluations);
 
-  if (isLeading) {
-    return _chooseLead(legal, ctx, difficulty).id;
-  }
-  final followingSuit = legal.every((c) => c.suit == leadSuit);
-  if (followingSuit) {
-    return _followSuit(legal, ctx, difficulty).id;
-  }
-  return _playVoid(legal, ctx, difficulty).id;
+  final decision = BotDecision(
+    selected: evaluations.first,
+    evaluations: evaluations,
+  );
+  debugLog?.call(decision.trace);
+  return decision;
 }
 
-class _BotContext {
+class _DecisionContext {
   final int botSeat;
   final String botTeam;
-  final Suit? trumpSuit;
-  final bool trumpEstablished;
-  final int trickNumber;
   final CurrentTrick? trick;
   final Suit? leadSuit;
+  final Suit? trumpSuit;
+  final int trickNumber;
   final CollectedTens collectedTens;
   final TrickPile trickPileA;
   final TrickPile trickPileB;
   final BotMemory memory;
   final List<PlayingCard> allCards;
+  final List<PlayingCard> legalCards;
+  final BotDifficulty difficulty;
 
-  _BotContext({
+  _DecisionContext({
     required this.botSeat,
     required this.botTeam,
-    required this.trumpSuit,
-    required this.trumpEstablished,
-    required this.trickNumber,
     required this.trick,
     required this.leadSuit,
+    required this.trumpSuit,
+    required this.trickNumber,
     required this.collectedTens,
     required this.trickPileA,
     required this.trickPileB,
     required this.memory,
     required this.allCards,
+    required this.legalCards,
+    required this.difficulty,
   });
 
-  bool get isPartnerWinning {
-    if (trick == null || trick!.plays.isEmpty) return false;
-    final w = trickWinner(trick!.plays, leadSuit!, trumpSuit);
-    return GameState.teamForSeat(w.seat) == botTeam;
-  }
-
-  bool get trickHasTen => trick?.plays.any((p) => p.card.isTen) ?? false;
-
+  bool get isLeading => trick == null || trick!.plays.isEmpty;
+  bool get trumpEstablished => trumpSuit != null;
+  bool get isEndgame => tricksRemaining <= 3;
+  bool get isLastTrick => tricksRemaining == 1;
   int get tricksRemaining => 14 - trickNumber;
-
   int get partnerSeat => GameState.partnerSeat(botSeat);
 
-  Set<String> get cardsAccountedFor {
-    final s = <String>{};
-    for (final c in allCards) {
-      s.add(c.id);
-    }
-    s.addAll(trickPileA.cards);
-    s.addAll(trickPileB.cards);
-    if (trick != null) {
-      for (final p in trick!.plays) {
-        s.add(p.card.id);
-      }
-    }
-    return s;
-  }
+  List<TrickPlay> get currentPlays => trick?.plays ?? const [];
 
-  Set<String> get cardsUnseen {
-    final all = PlayingCard.fullDeck.map((c) => c.id).toSet();
-    return all.difference(cardsAccountedFor);
-  }
+  TrickPlay? get currentWinner =>
+      isLeading ? null : trickWinner(currentPlays, leadSuit!, trumpSuit);
 
-  bool isOpponentSeat(int seat) => GameState.teamForSeat(seat) != botTeam;
+  bool get currentWinnerIsPartner =>
+      currentWinner != null &&
+      GameState.teamForSeat(currentWinner!.seat) == botTeam;
 
-  bool opponentKnownVoidIn(Suit suit) {
-    for (final seat in [1, 2, 3, 4]) {
-      if (seat == botSeat || seat == partnerSeat) continue;
-      if (memory.knownVoidSuits[seat]!.contains(suit)) return true;
-    }
-    return false;
-  }
+  bool get currentWinnerIsOpponent =>
+      currentWinner != null &&
+      GameState.teamForSeat(currentWinner!.seat) != botTeam;
 
-  Set<int> opponentsKnownVoidIn(Suit suit) {
-    final result = <int>{};
-    for (final seat in [1, 2, 3, 4]) {
-      if (seat == botSeat || seat == partnerSeat) continue;
-      if (memory.knownVoidSuits[seat]!.contains(suit)) result.add(seat);
-    }
-    return result;
-  }
-
-  bool partnerKnownVoidIn(Suit suit) =>
-      memory.knownVoidSuits[partnerSeat]!.contains(suit);
-
-  List<PlayingCard> unseenInSuit(Suit suit) {
-    final allInSuit = PlayingCard.fullDeck.where((c) => c.suit == suit);
-    return allInSuit.where((c) => !cardsAccountedFor.contains(c.id)).toList();
-  }
-
-  int higherCardsUnseen(Suit suit, Rank rank) =>
-      unseenInSuit(suit).where((c) => c.rank.value > rank.value).length;
-
-  bool isCardUnseen(String cardId) => !cardsAccountedFor.contains(cardId);
-
-  bool tenIsLive(Suit suit) {
-    final tenId = '10${suit.letter}';
-    if (collectedTens.tens[tenId] != null) return false;
-    return isCardUnseen(tenId);
-  }
-
-  bool get isEndgame => tricksRemaining <= 3;
-
-  int cardsInHand(Suit suit) => allCards.where((c) => c.suit == suit).length;
-
-  bool isVoidIn(Suit suit) => cardsInHand(suit) == 0;
-
-  bool suitIsDead(Suit suit) {
-    // A suit is "dead" if we are void and partner is known void,
-    // so sluffing low cards in it is safe.
-    if (!isVoidIn(suit)) return false;
-    return partnerKnownVoidIn(suit);
-  }
-
-  bool opponentCouldBeatCard(PlayingCard card) {
-    // Assumes card is being played in a non-trump context or as trump.
-    // Returns true if any opponent may still hold a higher card of the same suit.
-    return higherCardsUnseen(card.suit, card.rank) > 0;
-  }
-
-  bool get isLastToAct {
-    if (trick == null) return false;
-    return trick!.plays.length == 3;
-  }
+  bool get trickHasTen => currentPlays.any((play) => play.card.isTen);
 
   List<int> get laterSeats {
-    if (trick == null) return [];
-    final played = trick!.plays.length;
-    final seats = <int>[];
+    final remainingSeats = 3 - currentPlays.length;
     var seat = botSeat;
-    for (var i = played; i < 4; i++) {
+    final seats = <int>[];
+    for (var i = 0; i < remainingSeats; i++) {
       seat = GameState.nextSeat(seat);
       seats.add(seat);
     }
     return seats;
   }
 
-  bool laterOpponentCanBeat(TrickPlay currentWinner) {
-    for (final seat in laterSeats) {
-      if (!isOpponentSeat(seat)) continue;
-      if (higherCardsUnseen(currentWinner.card.suit, currentWinner.card.rank) >
-          0) {
-        return true;
-      }
-    }
-    return false;
-  }
-}
+  List<int> get laterOpponentSeats => laterSeats.where(isOpponentSeat).toList();
 
-// ── Leading (§6) ──
+  bool get isLastToAct => laterSeats.isEmpty;
 
-PlayingCard _chooseLead(
-    List<PlayingCard> legal, _BotContext ctx, BotDifficulty diff) {
-  if (diff == BotDifficulty.easy) {
-    return _easyLead(legal, ctx);
-  }
-  return _smartLead(legal, ctx, diff);
-}
+  bool isOpponentSeat(int seat) => GameState.teamForSeat(seat) != botTeam;
 
-PlayingCard _easyLead(List<PlayingCard> legal, _BotContext ctx) {
-  final safe = legal.where((c) => !c.isTen).toList();
-  final pool = safe.isNotEmpty ? safe : legal;
-  return pool[Random().nextInt(pool.length)];
-}
+  int cardsInHand(Suit suit) =>
+      allCards.where((card) => card.suit == suit).length;
 
-PlayingCard _smartLead(
-    List<PlayingCard> legal, _BotContext ctx, BotDifficulty diff) {
-  if (diff == BotDifficulty.hard) {
-    final hardChoice = _hardSmartLead(legal, ctx);
-    if (hardChoice != null) return hardChoice;
-  }
+  int higherCardsUnseen(Suit suit, Rank rank) => cardsUnseen
+      .where((card) => card.suit == suit && card.rank.value > rank.value)
+      .length;
 
-  // §6.1/6.2: Ace-then-Ten plan — if we hold an Ace, lead it to clear the
-  // path for a safe 10 lead next trick. If the Ace of a suit is already
-  // played (in piles or history), the 10 of that suit may be safe to lead.
-  final candidateTens = legal.where((c) => c.isTen).toList();
-  final safeTens = candidateTens.where((c) => _isLeadingTenSafe(c, ctx, legal)).toList();
+  late final List<PlayingCard> cardsUnseen = () {
+    final accountedFor = <String>{
+      ...allCards.map((card) => card.id),
+      ...trickPileA.cards,
+      ...trickPileB.cards,
+      ...currentPlays.map((play) => play.card.id),
+    };
+    return PlayingCard.fullDeck
+        .where((card) => !accountedFor.contains(card.id))
+        .toList();
+  }();
 
-  // Prefer leading an Ace whose suit has a 10 we hold (sets up next trick)
-  final acesSettingUpTen = legal.where((c) =>
-      c.rank == Rank.ace &&
-      ctx.allCards.any((h) => h.isTen && h.suit == c.suit)).toList();
-  if (acesSettingUpTen.isNotEmpty) {
-    return acesSettingUpTen.first;
-  }
+  /// Memory only records completed tricks, so also read voids off this trick.
+  bool isKnownVoid(int seat, Suit suit) =>
+      (memory.knownVoidSuits[seat]?.contains(suit) ?? false) ||
+      (leadSuit == suit &&
+          currentPlays.any((p) => p.seat == seat && p.card.suit != suit));
 
-  // Safe tens (Ace already spent, no opponent known-void that could trump)
-  if (safeTens.isNotEmpty) {
-    return safeTens.first;
-  }
+  bool partnerKnownVoidIn(Suit suit) => isKnownVoid(partnerSeat, suit);
 
-  // Avoid leading 10s and trump
-  final safe = legal.where((c) => !c.isTen).toList();
-  final pool = safe.isNotEmpty ? safe : legal;
-  final nonTrump = pool.where((c) => c.suit != ctx.trumpSuit).toList();
-  final candidates = nonTrump.isNotEmpty ? nonTrump : pool;
+  int opponentsKnownVoidIn(Suit suit) => [
+    1,
+    2,
+    3,
+    4,
+  ].where((seat) => isOpponentSeat(seat) && isKnownVoid(seat, suit)).length;
 
-  // Lead high card from longest suit
-  final suitCounts = <Suit, int>{};
-  for (final c in candidates) {
-    suitCounts[c.suit] = (suitCounts[c.suit] ?? 0) + 1;
-  }
-  final bestSuit =
-      suitCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
-  final suitCards = candidates.where((c) => c.suit == bestSuit).toList()
-    ..sort((a, b) => b.rank.value.compareTo(a.rank.value));
-  return suitCards.first;
-}
+  bool get opponentKnownVoidInLead =>
+      leadSuit != null && opponentsKnownVoidIn(leadSuit!) > 0;
 
-PlayingCard? _hardSmartLead(List<PlayingCard> legal, _BotContext ctx) {
-  // 1. Partner-ruff setup: lead cheapest non-10 from a suit partner is void in,
-  //    as long as opponents aren't also known void (which would let them trump).
-  final ruffSetupSuits = <Suit>{};
-  for (final suit in Suit.values) {
-    if (suit == ctx.trumpSuit) continue;
-    if (!ctx.partnerKnownVoidIn(suit)) continue;
-    if (ctx.opponentsKnownVoidIn(suit).isNotEmpty) continue;
-    if (ctx.cardsInHand(suit) > 0) ruffSetupSuits.add(suit);
-  }
-  if (ruffSetupSuits.isNotEmpty) {
-    final candidates = legal
-        .where((c) => ruffSetupSuits.contains(c.suit) && !c.isTen)
-        .toList()
-      ..sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    if (candidates.isNotEmpty) return candidates.first;
+  int get myTeamTenCount => collectedTens.tensForTeam(botTeam);
+
+  int get opponentTeamTenCount =>
+      collectedTens.tensForTeam(botTeam == 'teamA' ? 'teamB' : 'teamA');
+
+  int get tensStillUnresolved =>
+      collectedTens.tens.values.where((team) => team == null).length;
+
+  Set<String> get playedCardIds => {
+    ...trickPileA.cards,
+    ...trickPileB.cards,
+    ...currentPlays.map((play) => play.card.id),
+  };
+
+  Suit? projectedTrump(PlayingCard card) {
+    if (trumpSuit != null) return trumpSuit;
+    if (!isLeading && card.suit != leadSuit) return card.suit;
+    return null;
   }
 
-  // 2. Trump-drawing lead: if we hold high trump and opponents still have trump,
-  //    lead a cheap trump to draw theirs out.
-  if (ctx.trumpEstablished && ctx.trumpSuit != null) {
-    final trumpInHand = ctx.allCards.where((c) => c.suit == ctx.trumpSuit).toList()
-      ..sort((a, b) => b.rank.value.compareTo(a.rank.value));
-    final hasHighTrump = trumpInHand.isNotEmpty &&
-        (trumpInHand.first.rank == Rank.ace || trumpInHand.first.rank == Rank.king);
-    final unseenTrumps = ctx.unseenInSuit(ctx.trumpSuit!).length;
-    if (hasHighTrump && unseenTrumps > 0 && trumpInHand.length >= 2) {
-      final cheapTrump = trumpInHand.last;
-      // Don't lead a 10 of trump unless it's our last trump
-      if (!cheapTrump.isTen || trumpInHand.length == 1) return cheapTrump;
-    }
+  Suit projectedLead(PlayingCard card) => leadSuit ?? card.suit;
+
+  List<TrickPlay> playsAfter(PlayingCard card) => [
+    ...currentPlays,
+    TrickPlay(botSeat, card),
+  ];
+
+  bool wouldWinNow(PlayingCard card) {
+    final plays = playsAfter(card);
+    return trickWinner(plays, projectedLead(card), projectedTrump(card)).seat ==
+        botSeat;
   }
 
-  // 3. Safe 10 lead (existing logic, but more strict)
-  final safeTens = legal
-      .where((c) => c.isTen && _isLeadingTenSafe(c, ctx, legal))
-      .toList();
-  if (safeTens.isNotEmpty) return safeTens.first;
+  bool isTrump(PlayingCard card) => projectedTrump(card) == card.suit;
 
-  // 4. Ace-to-ten setup: prefer aces where partner isn't void and opponents
-  //    aren't known void, so the 10 lead next trick is safer.
-  final acesSettingUpTen = legal
-      .where((c) =>
-          c.rank == Rank.ace &&
-          ctx.allCards.any((h) => h.isTen && h.suit == c.suit))
-      .toList();
-  if (acesSettingUpTen.isNotEmpty) {
-    acesSettingUpTen.sort((a, b) {
-      final aRisk = (ctx.partnerKnownVoidIn(a.suit) ? 1 : 0) +
-          ctx.opponentsKnownVoidIn(a.suit).length;
-      final bRisk = (ctx.partnerKnownVoidIn(b.suit) ? 1 : 0) +
-          ctx.opponentsKnownVoidIn(b.suit).length;
-      return aRisk.compareTo(bRisk);
+  bool get isHighValueTrick => trickHasTen || isEndgame;
+
+  bool hasSafeNonTenDiscard() {
+    if (isLeading) return false;
+    return legalCards.any((card) {
+      if (card.isTen) return false;
+      if (currentWinnerIsPartner) return !wouldWinNow(card);
+      return !wouldWinNow(card);
     });
-    return acesSettingUpTen.first;
   }
 
-  // 5. Avoid leading suits where opponents are known void (they can trump)
-  final safe = legal.where((c) => !c.isTen).toList();
-  final pool = safe.isNotEmpty ? safe : legal;
-  var candidates = pool.where((c) => c.suit != ctx.trumpSuit).toList();
-  if (candidates.isEmpty) candidates = pool.toList();
-  candidates = candidates
-      .where((c) => ctx.opponentsKnownVoidIn(c.suit).isEmpty)
+  List<PlayingCard> get winningLegalCards =>
+      legalCards.where(wouldWinNow).toList();
+}
+
+class _BotWeights {
+  final double leadStrength;
+  final double overtakePartnerPenalty;
+  final double duckSmallBonus;
+  final double winTrickBonus;
+  final double securePartnerLead;
+  final double tenSafeDisposal;
+  final double preferOtherDiscard;
+  final double tenCaptureBonus;
+  final double avoidFeedingOpponentTen;
+  final double forcedTenSacrifice;
+  final double trumpBase;
+  final double strongTrumpThreshold;
+  final double strongTrumpMultiplier;
+  final double trumpForcedBonus;
+  final double trumpWinsImportantTrick;
+  final double trumpProtectsPartner;
+  final double trumpEndgameRelease;
+  final double highCardRetention;
+  final double voidCreationValue;
+  final double tenRetentionWhenProtected;
+  final double tenLeadRisk;
+  final double tenSetupLead;
+  final double overtakeRiskPenalty;
+  final double tenUrgencyHigh;
+  final double tenUrgencyLow;
+  final double jitterMagnitude;
+
+  /// Hidden-hand samples played out per decision; 0 disables simulation.
+  final int simulationSamples;
+  final double simulationWeight;
+
+  const _BotWeights({
+    this.simulationSamples = 0,
+    this.simulationWeight = 0,
+    required this.leadStrength,
+    required this.overtakePartnerPenalty,
+    required this.duckSmallBonus,
+    required this.winTrickBonus,
+    required this.securePartnerLead,
+    required this.tenSafeDisposal,
+    required this.preferOtherDiscard,
+    required this.tenCaptureBonus,
+    required this.avoidFeedingOpponentTen,
+    required this.forcedTenSacrifice,
+    required this.trumpBase,
+    required this.strongTrumpThreshold,
+    required this.strongTrumpMultiplier,
+    required this.trumpForcedBonus,
+    required this.trumpWinsImportantTrick,
+    required this.trumpProtectsPartner,
+    required this.trumpEndgameRelease,
+    required this.highCardRetention,
+    required this.voidCreationValue,
+    required this.tenRetentionWhenProtected,
+    required this.tenLeadRisk,
+    required this.tenSetupLead,
+    required this.overtakeRiskPenalty,
+    required this.tenUrgencyHigh,
+    required this.tenUrgencyLow,
+    required this.jitterMagnitude,
+  });
+
+  static const _easy = _BotWeights(
+    leadStrength: 0.25,
+    overtakePartnerPenalty: 0.4,
+    duckSmallBonus: 0.1,
+    winTrickBonus: 0.45,
+    securePartnerLead: 0.1,
+    tenSafeDisposal: 0.3,
+    preferOtherDiscard: 0.5,
+    tenCaptureBonus: 0.5,
+    avoidFeedingOpponentTen: 0.7,
+    forcedTenSacrifice: 0.2,
+    trumpBase: 0.55,
+    strongTrumpThreshold: 0.75,
+    strongTrumpMultiplier: 1.25,
+    trumpForcedBonus: 0.3,
+    trumpWinsImportantTrick: 0.6,
+    trumpProtectsPartner: 0.25,
+    trumpEndgameRelease: 0.2,
+    highCardRetention: 0.15,
+    voidCreationValue: 0.1,
+    tenRetentionWhenProtected: 0.2,
+    tenLeadRisk: 0.2,
+    tenSetupLead: 0.25,
+    overtakeRiskPenalty: 0.15,
+    tenUrgencyHigh: 0.2,
+    tenUrgencyLow: 0.08,
+    jitterMagnitude: 0.8,
+  );
+
+  static const _medium = _BotWeights(
+    leadStrength: 0.45,
+    overtakePartnerPenalty: 0.85,
+    duckSmallBonus: 0.18,
+    winTrickBonus: 0.85,
+    securePartnerLead: 0.35,
+    tenSafeDisposal: 0.75,
+    preferOtherDiscard: 0.9,
+    tenCaptureBonus: 1.35,
+    avoidFeedingOpponentTen: 1.5,
+    forcedTenSacrifice: 0.5,
+    trumpBase: 1.0,
+    strongTrumpThreshold: 0.75,
+    strongTrumpMultiplier: 1.7,
+    trumpForcedBonus: 0.4,
+    trumpWinsImportantTrick: 1.6,
+    trumpProtectsPartner: 0.5,
+    trumpEndgameRelease: 0.6,
+    highCardRetention: 0.5,
+    voidCreationValue: 0.35,
+    tenRetentionWhenProtected: 0.55,
+    tenLeadRisk: 0.7,
+    tenSetupLead: 0.9,
+    overtakeRiskPenalty: 0.55,
+    tenUrgencyHigh: 0.6,
+    tenUrgencyLow: 0.25,
+    jitterMagnitude: 0.25,
+  );
+
+  static const _hard = _BotWeights(
+    leadStrength: 0.65,
+    overtakePartnerPenalty: 1.35,
+    duckSmallBonus: 0.25,
+    winTrickBonus: 1.1,
+    securePartnerLead: 0.65,
+    tenSafeDisposal: 1.15,
+    preferOtherDiscard: 1.4,
+    tenCaptureBonus: 1.9,
+    avoidFeedingOpponentTen: 2.2,
+    forcedTenSacrifice: 0.7,
+    trumpBase: 1.4,
+    strongTrumpThreshold: 0.75,
+    strongTrumpMultiplier: 2.2,
+    trumpForcedBonus: 0.45,
+    trumpWinsImportantTrick: 2.2,
+    trumpProtectsPartner: 0.75,
+    trumpEndgameRelease: 1.0,
+    highCardRetention: 0.75,
+    voidCreationValue: 0.5,
+    tenRetentionWhenProtected: 0.85,
+    tenLeadRisk: 1.0,
+    tenSetupLead: 1.2,
+    overtakeRiskPenalty: 0.9,
+    tenUrgencyHigh: 0.9,
+    tenUrgencyLow: 0.35,
+    jitterMagnitude: 0.03,
+    // Tuned in self-play: more samples or a heavier weight did not win more.
+    simulationSamples: 16,
+    simulationWeight: 3,
+  );
+
+  static _BotWeights forDifficulty(BotDifficulty difficulty) {
+    switch (difficulty) {
+      case BotDifficulty.easy:
+        return _easy;
+      case BotDifficulty.medium:
+        return _medium;
+      case BotDifficulty.hard:
+        return _hard;
+    }
+  }
+}
+
+BotCardEvaluation _evaluateCard({
+  required PlayingCard card,
+  required _DecisionContext context,
+  required _BotWeights weights,
+  required Random random,
+  double? simulated,
+}) {
+  final breakdown = <BotFactorScore>[
+    _scoreImmediateOutcome(card, context, weights),
+    _scoreTeamPosition(card, context, weights),
+    _scoreTenManagement(card, context, weights),
+    _scoreTrumpPreservation(card, context, weights),
+    _scoreFutureValue(card, context, weights),
+    _scoreOvertakeRisk(card, context, weights),
+    _scoreTeamBenefit(card, context, weights),
+    _scoreRandomJitter(weights, random),
+    if (simulated != null)
+      BotFactorScore(
+        factor: 'simulation',
+        contribution: weights.simulationWeight * simulated,
+        reason:
+            'Played out ${weights.simulationSamples} sampled deals: '
+            'average result ${simulated.toStringAsFixed(2)} (-1.4 lose .. +1.4 win).',
+      ),
+  ];
+  final total = breakdown.fold<double>(
+    0,
+    (score, factor) => score + factor.contribution,
+  );
+  return BotCardEvaluation(
+    card: card,
+    totalScore: total,
+    breakdown: List.unmodifiable(breakdown),
+  );
+}
+
+BotFactorScore _scoreImmediateOutcome(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (context.isLeading) {
+    return BotFactorScore(
+      factor: 'immediate_outcome',
+      contribution: weights.leadStrength * _normalizedRank(card),
+      reason: 'Leading card has a rank-scaled baseline.',
+    );
+  }
+
+  final wouldWin = context.wouldWinNow(card);
+  if (context.currentWinnerIsPartner) {
+    // A ten lands in the trick either way, so topping partner with it wastes
+    // nothing — only higher cards are "spent" by an overtake.
+    if (wouldWin && !card.isTen) {
+      return BotFactorScore(
+        factor: 'immediate_outcome',
+        contribution: -weights.overtakePartnerPenalty,
+        reason: 'Would unnecessarily overtake the partner\'s winning card.',
+      );
+    }
+    return BotFactorScore(
+      factor: 'immediate_outcome',
+      contribution: weights.duckSmallBonus,
+      reason: 'Ducking under the partner\'s winning card is the default.',
+    );
+  }
+
+  if (context.currentWinnerIsOpponent && wouldWin) {
+    return BotFactorScore(
+      factor: 'immediate_outcome',
+      contribution: weights.winTrickBonus,
+      reason: 'Would take the current trick back from an opponent.',
+    );
+  }
+
+  return const BotFactorScore(
+    factor: 'immediate_outcome',
+    contribution: 0,
+    reason: 'Cannot improve the opponent\'s current winning card.',
+  );
+}
+
+BotFactorScore _scoreTeamPosition(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (context.isLeading ||
+      context.isLastToAct ||
+      !context.currentWinnerIsPartner) {
+    return const BotFactorScore(
+      factor: 'team_position',
+      contribution: 0,
+      reason: 'No additional team-position pressure applies.',
+    );
+  }
+
+  final candidateWins = context.wouldWinNow(card);
+  final partnerRisk = _estimateOvertakeProbabilityForCurrentWinner(context);
+  final candidateRisk = _estimateOvertakeProbability(card, context);
+  if (candidateWins && partnerRisk >= 0.5 && candidateRisk < partnerRisk) {
+    return BotFactorScore(
+      factor: 'team_position',
+      contribution: weights.securePartnerLead,
+      reason: 'A lower-risk overtake secures the partner\'s threatened lead.',
+    );
+  }
+
+  return const BotFactorScore(
+    factor: 'team_position',
+    contribution: 0,
+    reason: 'The partner\'s lead does not need extra protection.',
+  );
+}
+
+BotFactorScore _scoreTenManagement(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (!card.isTen) {
+    return const BotFactorScore(
+      factor: 'ten_management',
+      contribution: 0,
+      reason: 'Not a ten, so no direct ten-management pressure applies.',
+    );
+  }
+
+  final risk = (context.isLeading || context.wouldWinNow(card))
+      ? _estimateOvertakeProbability(card, context)
+      : _estimateOvertakeProbabilityForCurrentWinner(context);
+  // +1 when the ten is sure to stay with us, -1 when it is sure to be lost.
+  final security = 1 - 2 * risk;
+  final riskText = '${(risk * 100).round()}% overtake risk';
+
+  if (context.isLeading) {
+    return BotFactorScore(
+      factor: 'ten_management',
+      contribution: security > 0
+          ? weights.tenSafeDisposal * security
+          : weights.tenLeadRisk * security,
+      reason: 'Leading this ten ($riskText).',
+    );
+  }
+
+  final safeDiscardExists = context.hasSafeNonTenDiscard();
+  if (context.currentWinnerIsPartner) {
+    if (security > 0) {
+      return BotFactorScore(
+        factor: 'ten_management',
+        contribution: weights.tenSafeDisposal * security,
+        reason: 'Banks the ten on the partner\'s trick ($riskText).',
+      );
+    }
+    return BotFactorScore(
+      factor: 'ten_management',
+      contribution:
+          (safeDiscardExists
+              ? weights.preferOtherDiscard
+              : weights.forcedTenSacrifice) *
+          security,
+      reason: 'The partner\'s trick is likely to be overtaken ($riskText).',
+    );
+  }
+
+  if (context.currentWinnerIsOpponent) {
+    final tenWins = context.wouldWinNow(card);
+    if (tenWins) {
+      final cheapest = _cheapestWinningCard(context) == card;
+      return BotFactorScore(
+        factor: 'ten_management',
+        contribution: weights.tenCaptureBonus * security * (cheapest ? 1 : 0.5),
+        reason: 'This ten recaptures the trick ($riskText).',
+      );
+    }
+    if (!tenWins && safeDiscardExists) {
+      return BotFactorScore(
+        factor: 'ten_management',
+        contribution: -weights.avoidFeedingOpponentTen,
+        reason: 'This ten cannot win and a safer discard avoids feeding it to opponents.',
+      );
+    }
+    if (!tenWins) {
+      return BotFactorScore(
+        factor: 'ten_management',
+        contribution: -weights.forcedTenSacrifice,
+        reason: 'No other safe discard exists, so this ten must be sacrificed.',
+      );
+    }
+  }
+
+  return const BotFactorScore(
+    factor: 'ten_management',
+    contribution: 0,
+    reason: 'No direct ten-management signal applies.',
+  );
+}
+
+BotFactorScore _scoreTrumpPreservation(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (!context.isTrump(card)) {
+    return const BotFactorScore(
+      factor: 'trump_preservation',
+      contribution: 0,
+      reason: 'Not a trump card.',
+    );
+  }
+
+  final normalizedRank = _normalizedRank(card);
+  final strongTrump = normalizedRank >= weights.strongTrumpThreshold;
+  final reservationMultiplier = strongTrump
+      ? weights.strongTrumpMultiplier
+      : 1 + normalizedRank * 0.5;
+  final basePenalty = -weights.trumpBase * reservationMultiplier;
+  var justification = 0.0;
+  final reasons = <String>[];
+  final nonTrumpAlternative = context.legalCards.any(
+    (other) => !context.isTrump(other),
+  );
+
+  if (!nonTrumpAlternative) {
+    justification += weights.trumpForcedBonus;
+    reasons.add('no non-trump legal alternative exists');
+  }
+  if (context.currentWinnerIsOpponent &&
+      context.wouldWinNow(card) &&
+      context.isHighValueTrick) {
+    justification += weights.trumpWinsImportantTrick;
+    reasons.add('it recaptures an important opponent trick');
+  }
+  if (context.currentWinnerIsPartner &&
+      context.wouldWinNow(card) &&
+      _estimateOvertakeProbabilityForCurrentWinner(context) >= 0.5 &&
+      _estimateOvertakeProbability(card, context) <
+          _estimateOvertakeProbabilityForCurrentWinner(context)) {
+    justification += weights.trumpProtectsPartner;
+    reasons.add('it reduces the threat against the partner\'s lead');
+  }
+  if (context.isEndgame) {
+    justification +=
+        weights.trumpEndgameRelease * (context.isLastTrick ? 1 : 0.5);
+    reasons.add('few tricks remain to preserve trump for');
+  }
+
+  return BotFactorScore(
+    factor: 'trump_preservation',
+    contribution: basePenalty + justification,
+    reason: reasons.isEmpty
+        ? 'Preserving this ${strongTrump ? 'strong' : 'weak'} trump has more value.'
+        : 'Trump play is justified because ${reasons.join('; ')}.',
+  );
+}
+
+BotFactorScore _scoreFutureValue(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (context.isTrump(card)) {
+    return const BotFactorScore(
+      factor: 'future_value',
+      contribution: 0,
+      reason: 'Trump retention is scored separately.',
+    );
+  }
+
+  var contribution = 0.0;
+  final reasons = <String>[];
+  final suitLength = context.cardsInHand(card.suit);
+  final higherUnseen = context.higherCardsUnseen(card.suit, card.rank);
+
+  if (card.rank.value >= Rank.jack.value && higherUnseen <= 1) {
+    contribution -= weights.highCardRetention;
+    reasons.add('it is near the top of its suit and worth retaining');
+  }
+  if (context.isLeading &&
+      card.rank == Rank.ace &&
+      context.allCards.any((held) => held.isTen && held.suit == card.suit)) {
+    contribution += weights.tenSetupLead;
+    reasons.add('it clears the path to cash a held ten later');
+  }
+  if (suitLength == 1 && !card.isTen && !context.trumpEstablished) {
+    contribution += weights.voidCreationValue;
+    reasons.add('it creates a future void while trump is unset');
+  }
+  if (card.isTen && suitLength > 1) {
+    contribution -= weights.tenRetentionWhenProtected;
+    reasons.add('other cards in this suit can still protect the ten');
+  }
+
+  return BotFactorScore(
+    factor: 'future_value',
+    contribution: contribution,
+    reason: reasons.isEmpty
+        ? 'No strong future-retention signal applies.'
+        : reasons.join('; '),
+  );
+}
+
+BotFactorScore _scoreOvertakeRisk(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (context.isLastToAct) {
+    return const BotFactorScore(
+      factor: 'overtake_risk',
+      contribution: 0,
+      reason: 'No one remains to overtake this play.',
+    );
+  }
+  if (!context.wouldWinNow(card)) {
+    return const BotFactorScore(
+      factor: 'overtake_risk',
+      contribution: 0,
+      reason: 'This card would not be winning now.',
+    );
+  }
+
+  final probability = _estimateOvertakeProbability(card, context);
+  return BotFactorScore(
+    factor: 'overtake_risk',
+    contribution: -weights.overtakeRiskPenalty * probability,
+    reason:
+        'Later opponents have an estimated '
+        '${(probability * 100).round()}% chance to overtake this play.',
+  );
+}
+
+BotFactorScore _scoreTeamBenefit(
+  PlayingCard card,
+  _DecisionContext context,
+  _BotWeights weights,
+) {
+  if (!context.wouldWinNow(card)) {
+    return const BotFactorScore(
+      factor: 'team_benefit',
+      contribution: 0,
+      reason: 'This card is not currently winning the trick.',
+    );
+  }
+  if (context.tensStillUnresolved == 0) {
+    return const BotFactorScore(
+      factor: 'team_benefit',
+      contribution: 0,
+      reason: 'All tens are already resolved.',
+    );
+  }
+
+  final urgency = context.opponentTeamTenCount >= context.myTeamTenCount
+      ? weights.tenUrgencyHigh
+      : weights.tenUrgencyLow;
+  final contribution = urgency * (context.trickHasTen ? 1 : 0.3);
+  return BotFactorScore(
+    factor: 'team_benefit',
+    contribution: contribution,
+    reason: 'The team\'s ten standing adjusts the value of winning this trick.',
+  );
+}
+
+BotFactorScore _scoreRandomJitter(_BotWeights weights, Random random) {
+  final contribution = (random.nextDouble() * 2 - 1) * weights.jitterMagnitude;
+  return BotFactorScore(
+    factor: 'jitter',
+    contribution: contribution,
+    reason: 'Difficulty-scaled decision variability.',
+  );
+}
+
+List<PlayingCard> _trumpEstablishingCandidates(_DecisionContext context) {
+  if (context.isLeading ||
+      context.trumpEstablished ||
+      context.leadSuit == null) {
+    return context.legalCards;
+  }
+  if (context.legalCards.any((card) => card.suit == context.leadSuit)) {
+    return context.legalCards;
+  }
+
+  final suits = context.legalCards.map((card) => card.suit).toSet();
+  final preferredSuit = suits.reduce((best, candidate) {
+    final bestScore = _trumpSuitQuality(best, context);
+    final candidateScore = _trumpSuitQuality(candidate, context);
+    return candidateScore > bestScore ? candidate : best;
+  });
+  return context.legalCards
+      .where((card) => card.suit == preferredSuit)
       .toList();
-  if (candidates.isEmpty) candidates = pool.toList();
+}
 
-  // 6. Endgame: lead a guaranteed winner if possible
-  if (ctx.isEndgame) {
-    final guaranteedWinners = candidates.where((c) {
-      if (c.suit == ctx.trumpSuit) {
-        return ctx.higherCardsUnseen(c.suit, c.rank) == 0;
-      }
-      // Non-trump winner only if no unseen trump and no higher card in suit
-      if (ctx.trumpSuit != null &&
-          ctx.unseenInSuit(ctx.trumpSuit!).isNotEmpty) {
-        return false;
-      }
-      return ctx.higherCardsUnseen(c.suit, c.rank) == 0;
-    }).toList();
-    if (guaranteedWinners.isNotEmpty) {
-      guaranteedWinners.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-      return guaranteedWinners.first;
+double _trumpSuitQuality(Suit suit, _DecisionContext context) {
+  final cards = context.allCards.where((card) => card.suit == suit).toList();
+  var score = cards.length * 3.0;
+  for (final card in cards) {
+    if (card.rank == Rank.ace) score += 6;
+    if (card.rank == Rank.king) score += 4;
+    if (card.rank == Rank.queen) score += 2.5;
+    if (card.rank == Rank.jack) score += 1.5;
+  }
+  if (cards.any((card) => card.isTen)) score += 8;
+  if (context.partnerKnownVoidIn(suit)) score -= 4;
+  score += context.opponentsKnownVoidIn(suit) * 3;
+  score -= context.cardsUnseen.where((card) => card.suit == suit).length * 0.5;
+  score +=
+      context.allCards
+          .where((card) => card.suit != suit && card.rank == Rank.ace)
+          .length *
+      1.0;
+  if (context.trickHasTen && suit != context.leadSuit) {
+    final candidate = cards.reduce(
+      (a, b) => a.rank.value >= b.rank.value ? a : b,
+    );
+    if (context.wouldWinNow(candidate)) score += 20;
+  }
+  return score;
+}
+
+PlayingCard? _cheapestWinningCard(_DecisionContext context) {
+  final winners = context.winningLegalCards;
+  if (winners.isEmpty) return null;
+  winners.sort((a, b) {
+    final trumpComparison = context.isTrump(a) == context.isTrump(b)
+        ? 0
+        : (context.isTrump(a) ? 1 : -1);
+    if (trumpComparison != 0) return trumpComparison;
+    return a.rank.value.compareTo(b.rank.value);
+  });
+  return winners.first;
+}
+
+double _normalizedRank(PlayingCard card) => (card.rank.value - 2) / 12;
+
+double _estimateOvertakeProbability(
+  PlayingCard card,
+  _DecisionContext context,
+) => _estimateOvertakeProbabilityFromPlays(
+  plays: context.playsAfter(card),
+  leadSuit: context.projectedLead(card),
+  trumpSuit: context.projectedTrump(card),
+  laterOpponentSeats: context.laterOpponentSeats,
+  context: context,
+);
+
+double _estimateOvertakeProbabilityForCurrentWinner(_DecisionContext context) {
+  if (context.currentWinner == null || context.isLastToAct) return 0;
+  return _estimateOvertakeProbabilityFromPlays(
+    plays: context.currentPlays,
+    leadSuit: context.leadSuit!,
+    trumpSuit: context.trumpSuit,
+    laterOpponentSeats: context.laterOpponentSeats,
+    context: context,
+  );
+}
+
+double _estimateOvertakeProbabilityFromPlays({
+  required List<TrickPlay> plays,
+  required Suit leadSuit,
+  required Suit? trumpSuit,
+  required List<int> laterOpponentSeats,
+  required _DecisionContext context,
+}) {
+  if (laterOpponentSeats.isEmpty) return 0;
+  final winner = trickWinner(plays, leadSuit, trumpSuit).card;
+  final unseen = context.cardsUnseen;
+  final n = unseen.length;
+  final handSize = 14 - context.trickNumber;
+  final winnerIsTrump = winner.suit == trumpSuit;
+  final leadCount = unseen.where((c) => c.suit == leadSuit).length;
+  final leadThreats = winnerIsTrump
+      ? 0
+      : unseen
+            .where(
+              (c) => c.suit == leadSuit && c.rank.value > winner.rank.value,
+            )
+            .length;
+  final trumpThreats = trumpSuit == null
+      ? 0
+      : unseen
+            .where(
+              (c) =>
+                  c.suit == trumpSuit &&
+                  (!winnerIsTrump || c.rank.value > winner.rank.value),
+            )
+            .length;
+
+  var missChance = 1.0;
+  for (final seat in laterOpponentSeats) {
+    // Unset trump: whatever a void opponent throws becomes trump and wins.
+    final ruff = trumpSuit == null
+        ? 1.0
+        : context.isKnownVoid(seat, trumpSuit)
+        ? 0.0
+        : 1 - _noneDrawn(n - leadCount, trumpThreats, handSize);
+    final exact = context.isKnownVoid(seat, leadSuit)
+        ? ruff
+        : 1 -
+              _noneDrawn(n, leadThreats, handSize) +
+              _noneDrawn(n, leadCount, handSize) * ruff;
+    final seatProbability = switch (context.difficulty) {
+      BotDifficulty.easy => exact > 0.05 ? 0.25 : 0.0,
+      BotDifficulty.medium => min(0.9, exact * 0.8 + 0.05),
+      BotDifficulty.hard => exact,
+    };
+    missChance *= 1 - seatProbability.clamp(0.0, 1.0);
+  }
+  return 1 - missChance;
+}
+
+/// Chance that none of [special] cards land in a [draws]-card hand dealt
+/// from [pool] cards (hypergeometric, zero successes).
+double _noneDrawn(int pool, int special, int draws) {
+  if (special <= 0) return 1;
+  if (draws > pool - special) return 0;
+  var p = 1.0;
+  for (var i = 0; i < draws; i++) {
+    p *= (pool - special - i) / (pool - i);
+  }
+  return p;
+}
+
+/// Determinized look-ahead: deal the unseen cards to the other seats in a way
+/// consistent with known voids, then play each candidate to the end of the
+/// game with the medium policy. Every candidate sees the same samples so the
+/// comparison between cards is not drowned in deal-to-deal noise.
+// ponytail: fixed sample count on the calling isolate; add a time budget or
+// move to an isolate if low-end phones stutter.
+Map<PlayingCard, double> _simulateCandidates({
+  required List<PlayingCard> candidates,
+  required GameState game,
+  required _DecisionContext context,
+  required int samples,
+  required Random random,
+}) {
+  final totals = {for (final card in candidates) card: 0.0};
+  var played = 0;
+  for (var i = 0; i < samples; i++) {
+    final hidden = _sampleHiddenHands(context, random);
+    if (hidden == null) break;
+    final seed = random.nextInt(1 << 30);
+    for (final card in candidates) {
+      final hands = {
+        for (final entry in hidden.entries) entry.key: [...entry.value],
+        context.botSeat: [...context.allCards]..remove(card),
+      };
+      final memory = BotMemory();
+      context.memory.knownVoidSuits.forEach(
+        (seat, suits) => memory.knownVoidSuits[seat]!.addAll(suits),
+      );
+      totals[card] =
+          totals[card]! +
+          _playOut(game, context, card, hands, memory, Random(seed));
     }
+    played++;
   }
-
-  // 7. Lead high card from longest suit (existing behavior)
-  final suitCounts = <Suit, int>{};
-  for (final c in candidates) {
-    suitCounts[c.suit] = (suitCounts[c.suit] ?? 0) + 1;
-  }
-  final bestSuit =
-      suitCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
-  final suitCards = candidates.where((c) => c.suit == bestSuit).toList()
-    ..sort((a, b) => b.rank.value.compareTo(a.rank.value));
-  return suitCards.first;
+  if (played == 0) return const {};
+  return totals.map((card, total) => MapEntry(card, total / played));
 }
 
-/// §6.2: Is it safe to lead this 10?
-bool _isLeadingTenSafe(PlayingCard ten, _BotContext ctx, List<PlayingCard> legal) {
-  // The Ace of this suit must already be accounted for (played or we hold it)
-  final aceInHand = ctx.allCards.any((c) => c.suit == ten.suit && c.rank == Rank.ace);
-  final aceInPiles = ctx.cardsAccountedFor.contains('A${ten.suit.letter}');
-  if (!aceInHand && !aceInPiles) return false;
-  // If trump is set and an opponent is known-void in this suit, they can trump it
-  if (ctx.trumpEstablished && ten.suit != ctx.trumpSuit) {
-    if (ctx.opponentKnownVoidIn(ten.suit)) return false;
-  }
-  return true;
-}
+Map<int, List<PlayingCard>>? _sampleHiddenHands(
+  _DecisionContext context,
+  Random random,
+) {
+  final handSize = 14 - context.trickNumber;
+  final seats = [
+    for (var seat = 1; seat <= 4; seat++)
+      if (seat != context.botSeat) seat,
+  ];
+  final need = {
+    for (final seat in seats)
+      seat:
+          handSize -
+          (context.currentPlays.any((play) => play.seat == seat) ? 1 : 0),
+  };
+  final unseen = context.cardsUnseen;
+  // Hand-built or inconsistent state: nothing sound to sample from.
+  if (need.values.fold(0, (a, b) => a + b) != unseen.length) return null;
 
-// ── Following suit (§7) ──
-
-PlayingCard _followSuit(
-    List<PlayingCard> legal, _BotContext ctx, BotDifficulty diff) {
-  if (diff == BotDifficulty.hard) {
-    final hardChoice = _hardFollowSuit(legal, ctx);
-    if (hardChoice != null) return hardChoice;
-  }
-
-  final sorted = List.of(legal)
-    ..sort((a, b) => b.rank.value.compareTo(a.rank.value));
-  final winner = trickWinner(ctx.trick!.plays, ctx.leadSuit!, ctx.trumpSuit);
-
-  if (ctx.isPartnerWinning) {
-    // Partner is winning — play low, but protect a ten if an opponent plays after us
-    if (ctx.trickHasTen && _laterOpponentCanPlay(ctx)) {
-      // Try to overtake with cheapest winner to secure the ten
-      final canWin = sorted
-          .where((c) => _beatsCurrentWinner(c, winner, ctx))
+  for (var attempt = 0; attempt < 20; attempt++) {
+    final respectVoids = attempt < 15;
+    bool open(int seat, Suit suit) =>
+        !(respectVoids && context.isKnownVoid(seat, suit));
+    final left = Map.of(need);
+    final hands = {for (final seat in seats) seat: <PlayingCard>[]};
+    // Place the most constrained suits first so voids rarely dead-end.
+    final deck = [...unseen]..shuffle(random);
+    deck.sort(
+      (a, b) => seats
+          .where((seat) => open(seat, a.suit))
+          .length
+          .compareTo(seats.where((seat) => open(seat, b.suit)).length),
+    );
+    var ok = true;
+    for (final card in deck) {
+      final eligible = seats
+          .where((seat) => left[seat]! > 0 && open(seat, card.suit))
           .toList();
-      if (canWin.isNotEmpty) return canWin.last;
+      if (eligible.isEmpty) {
+        ok = false;
+        break;
+      }
+      var pick = random.nextInt(
+        eligible.fold(0, (sum, seat) => sum + left[seat]!),
+      );
+      final seat = eligible.firstWhere((seat) {
+        pick -= left[seat]!;
+        return pick < 0;
+      });
+      hands[seat]!.add(card);
+      left[seat] = left[seat]! - 1;
     }
-    // Duck — lowest non-10
-    final safe = sorted.where((c) => !c.isTen).toList();
-    return safe.isNotEmpty ? safe.last : sorted.last;
+    if (ok) return hands;
   }
-
-  // Opponent winning — try to win
-  if (ctx.trickHasTen || diff != BotDifficulty.easy) {
-    final canWin = sorted
-        .where((c) => _beatsCurrentWinner(c, winner, ctx))
-        .toList();
-    if (canWin.isNotEmpty) return canWin.last; // cheapest winner
-  }
-
-  // Can't win — dump lowest non-10
-  final safe = sorted.where((c) => !c.isTen).toList();
-  return safe.isNotEmpty ? safe.last : sorted.last;
+  return null;
 }
 
-PlayingCard? _hardFollowSuit(List<PlayingCard> legal, _BotContext ctx) {
-  final sorted = List.of(legal)
-    ..sort((a, b) => b.rank.value.compareTo(a.rank.value));
-  final winner = trickWinner(ctx.trick!.plays, ctx.leadSuit!, ctx.trumpSuit);
-
-  // Helper: cheapest card that beats the current winner
-  PlayingCard? cheapestWinner() {
-    final canWin = sorted
-        .where((c) => _beatsCurrentWinner(c, winner, ctx))
-        .toList();
-    return canWin.isNotEmpty ? canWin.last : null;
-  }
-
-  if (ctx.isPartnerWinning) {
-    final partnerCard = ctx.trick!.plays.lastWhere(
-      (p) => GameState.teamForSeat(p.seat) == ctx.botTeam,
+/// Plays [card] for the bot, then every remaining card with the medium
+/// policy. Returns +1/-1 for a team win/loss plus 0.1 per ten of margin.
+double _playOut(
+  GameState game,
+  _DecisionContext context,
+  PlayingCard card,
+  Map<int, List<PlayingCard>> hands,
+  BotMemory memory,
+  Random random,
+) {
+  var state = game;
+  var seat = context.botSeat;
+  var next = card;
+  while (true) {
+    final trick = state.currentTrick!;
+    final plays = [...trick.plays, TrickPlay(seat, next)];
+    final leadSuit = trick.plays.isEmpty ? next.suit : state.leadSuit!;
+    final setsTrump =
+        state.trumpSuit == null &&
+        trick.plays.isNotEmpty &&
+        next.suit != leadSuit;
+    final trumpSuit = setsTrump ? next.suit : state.trumpSuit;
+    state = state.copyWith(
+      leadSuit: leadSuit,
+      trumpSuit: trumpSuit,
+      currentTrick: CurrentTrick(leaderSeat: trick.leaderSeat, plays: plays),
+      currentTurnSeat: GameState.nextSeat(seat),
     );
 
-    // Cover partner if a later opponent might beat them and the trick matters
-    final trickMatters = ctx.trickHasTen || ctx.isEndgame;
-    if (trickMatters &&
-        ctx.laterOpponentCanBeat(partnerCard) &&
-        ctx.laterSeats.any((s) => ctx.isOpponentSeat(s))) {
-      final cover = cheapestWinner();
-      if (cover != null) return cover;
-    }
-
-    // Duck with lowest non-10
-    final safe = sorted.where((c) => !c.isTen).toList();
-    return safe.isNotEmpty ? safe.last : sorted.last;
-  }
-
-  // Opponent is winning
-  final trickMatters = ctx.trickHasTen || ctx.isEndgame;
-
-  if (trickMatters) {
-    final win = cheapestWinner();
-    if (win != null) return win;
-  }
-
-  // Don't waste high cards on meaningless tricks early
-  if (!ctx.isEndgame && !ctx.trickHasTen) {
-    final safe = sorted.where((c) => !c.isTen).toList();
-    return safe.isNotEmpty ? safe.last : sorted.last;
-  }
-
-  // Default: cheapest winner if any, else dump
-  final win = cheapestWinner();
-  if (win != null) return win;
-  final safe = sorted.where((c) => !c.isTen).toList();
-  return safe.isNotEmpty ? safe.last : sorted.last;
-}
-
-bool _beatsCurrentWinner(PlayingCard card, TrickPlay winner, _BotContext ctx) {
-  // Same suit comparison only (we're following suit, not trumping)
-  if (card.suit != winner.card.suit) return false;
-  return card.rank.value > winner.card.rank.value;
-}
-
-bool _laterOpponentCanPlay(_BotContext ctx) {
-  if (ctx.trick == null) return false;
-  final played = ctx.trick!.plays.length;
-  // Walk remaining seats in play order to see if an opponent is still to act
-  var seat = ctx.botSeat;
-  for (var i = played; i < 4; i++) {
-    seat = GameState.nextSeat(seat);
-    if (ctx.isOpponentSeat(seat)) return true;
-  }
-  return false;
-}
-
-// ── Void play (§8) ──
-
-PlayingCard _playVoid(
-    List<PlayingCard> legal, _BotContext ctx, BotDifficulty diff) {
-  final trumpCards = ctx.trumpSuit != null
-      ? legal.where((c) => c.suit == ctx.trumpSuit).toList()
-      : <PlayingCard>[];
-  final nonTrump = legal.where((c) => c.suit != ctx.trumpSuit).toList();
-
-  // §8.1: Trump not yet established — this play sets it
-  if (!ctx.trumpEstablished) {
-    return _chooseTrumpEstablishing(legal, ctx, diff);
-  }
-
-  if (diff == BotDifficulty.hard) {
-    return _hardPlayVoid(legal, trumpCards, nonTrump, ctx);
-  }
-
-  // §8.2: Should we trump in?
-  if (trumpCards.isNotEmpty && !ctx.isPartnerWinning) {
-    final shouldTrump = _shouldTrumpIn(trumpCards, ctx, diff);
-    if (shouldTrump) {
-      return _cheapestTrumpThatWins(trumpCards, ctx);
-    }
-  }
-
-  // §8.3: Sluff
-  return _chooseSluff(nonTrump.isNotEmpty ? nonTrump : legal, ctx);
-}
-
-PlayingCard _hardPlayVoid(
-  List<PlayingCard> legal,
-  List<PlayingCard> trumpCards,
-  List<PlayingCard> nonTrump,
-  _BotContext ctx,
-) {
-  // Never trump partner's winner
-  if (ctx.isPartnerWinning) {
-    return _hardChooseSluff(nonTrump.isNotEmpty ? nonTrump : legal, ctx);
-  }
-
-  final winner = ctx.trick != null && ctx.trick!.plays.isNotEmpty
-      ? trickWinner(ctx.trick!.plays, ctx.leadSuit!, ctx.trumpSuit)
-      : null;
-
-  // Trump to capture an opponent's ten or win a critical endgame trick
-  if (trumpCards.isNotEmpty && winner != null) {
-    final opponentWinning = ctx.isOpponentSeat(winner.seat);
-
-    if (opponentWinning && (ctx.trickHasTen || ctx.isEndgame)) {
-      final winningTrump = _cheapestTrumpThatWins(trumpCards, ctx);
-      // Verify it actually wins
-      if (winningTrump.suit == ctx.trumpSuit) {
-        if (winner.card.suit == ctx.trumpSuit) {
-          if (winningTrump.rank.value > winner.card.rank.value) {
-            return winningTrump;
-          }
-        } else {
-          return winningTrump;
-        }
+    if (plays.length == 4) {
+      final winner = trickWinner(plays, leadSuit, trumpSuit);
+      final team = GameState.teamForSeat(winner.seat);
+      final tens = Map<String, String?>.from(state.collectedTens.tens);
+      for (final play in plays) {
+        if (play.card.isTen) tens[play.card.id] = team;
+        memory.recordPlay(play.seat, play.card, leadSuit);
       }
-    }
-
-    // Last to act: trump a meaningful opponent-winning trick
-    if (opponentWinning &&
-        ctx.isLastToAct &&
-        (ctx.trickHasTen || ctx.isEndgame)) {
-      final winningTrump = _cheapestTrumpThatWins(trumpCards, ctx);
-      if (winner.card.suit != ctx.trumpSuit) return winningTrump;
-      if (winningTrump.rank.value > winner.card.rank.value) {
-        return winningTrump;
+      final ids = plays.map((play) => play.card.id);
+      TrickPile add(TrickPile pile) => TrickPile(
+        trickCount: pile.trickCount + 1,
+        cards: [...pile.cards, ...ids],
+      );
+      final pileA = team == 'teamA' ? add(state.trickPileA) : state.trickPileA;
+      final pileB = team == 'teamB' ? add(state.trickPileB) : state.trickPileB;
+      final outcome = evaluateWinner(
+        collectedTens: tens,
+        trickCounts: {'teamA': pileA.trickCount, 'teamB': pileB.trickCount},
+      );
+      if (outcome.team != null) {
+        final collected = CollectedTens(tens: tens);
+        final margin =
+            collected.tensForTeam(context.botTeam) -
+            collected.tensForTeam(
+              context.botTeam == 'teamA' ? 'teamB' : 'teamA',
+            );
+        return (outcome.team == context.botTeam ? 1 : -1) + 0.1 * margin;
       }
+      state = state.copyWith(
+        collectedTens: CollectedTens(tens: tens),
+        trickPileA: pileA,
+        trickPileB: pileB,
+        trickNumber: state.trickNumber + 1,
+        currentTurnSeat: winner.seat,
+        leadSuit: null,
+        currentTrick: CurrentTrick(leaderSeat: winner.seat),
+      );
     }
-  }
 
-  // Sluff
-  return _hardChooseSluff(nonTrump.isNotEmpty ? nonTrump : legal, ctx);
+    seat = state.currentTurnSeat!;
+    final hand = hands[seat]!;
+    next = PlayingCard.fromId(
+      chooseBotCard(
+        hand: [for (final held in hand) held.id],
+        gameState: state,
+        botSeat: seat,
+        memory: memory,
+        random: random,
+      ),
+    );
+    hand.remove(next);
+  }
 }
 
-PlayingCard _hardChooseSluff(List<PlayingCard> cards, _BotContext ctx) {
-  // Never sluff a 10 if avoidable
-  var pool = cards.where((c) => !c.isTen).toList();
-  if (pool.isEmpty) pool = cards;
-
-  // Prefer sluffing from dead suits (both we and partner are void, so no value)
-  final deadSuitCards = pool.where((c) => ctx.suitIsDead(c.suit)).toList();
-  if (deadSuitCards.isNotEmpty) {
-    deadSuitCards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    return deadSuitCards.first;
-  }
-
-  // Avoid sluffing from trump
-  final nonTrump = pool.where((c) => c.suit != ctx.trumpSuit).toList();
-  final sluffPool = nonTrump.isNotEmpty ? nonTrump : pool;
-
-  // Sluff from shortest side suit to create voids fastest
-  final bySuit = <Suit, List<PlayingCard>>{};
-  for (final c in sluffPool) {
-    bySuit.putIfAbsent(c.suit, () => []).add(c);
-  }
-  final shortest = bySuit.entries.toList()
-    ..sort((a, b) => a.value.length.compareTo(b.value.length));
-  if (shortest.isNotEmpty) {
-    final suitCards = shortest.first.value
-      ..sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    return suitCards.first;
-  }
-
-  return sluffPool.reduce((a, b) => a.rank.value <= b.rank.value ? a : b);
-}
-
-/// §8.1: Choose which suit to establish as trump.
-PlayingCard _chooseTrumpEstablishing(
-    List<PlayingCard> legal, _BotContext ctx, BotDifficulty diff) {
-  if (diff == BotDifficulty.easy) {
-    // Random off-suit, avoiding 10s
-    final safe = legal.where((c) => !c.isTen).toList();
-    final pool = safe.isNotEmpty ? safe : legal;
-    return pool[Random().nextInt(pool.length)];
-  }
-
-  // Score each candidate suit for trump quality
-  final suitScores = <Suit, double>{};
-  for (final card in legal) {
-    if (suitScores.containsKey(card.suit)) continue;
-    suitScores[card.suit] = diff == BotDifficulty.hard
-        ? _evaluateTrumpSuitQualityHard(card.suit, ctx)
-        : _evaluateTrumpSuitQuality(card.suit, ctx);
-  }
-
-  final bestSuit = suitScores.entries
-      .reduce((a, b) => a.value >= b.value ? a : b)
-      .key;
-
-  // Play lowest card of chosen suit — save high trump for winning tricks
-  final suitCards = legal.where((c) => c.suit == bestSuit).toList()
-    ..sort((a, b) => a.rank.value.compareTo(b.rank.value));
-  // Avoid spending a 10 to set trump if possible
-  final nonTen = suitCards.where((c) => !c.isTen).toList();
-  return nonTen.isNotEmpty ? nonTen.first : suitCards.first;
-}
-
-double _evaluateTrumpSuitQuality(Suit suit, _BotContext ctx) {
-  final cardsInSuit = ctx.allCards.where((c) => c.suit == suit).toList();
-  var score = 0.0;
-  // Length is king — more trump = more control
-  score += cardsInSuit.length * 3.0;
-  // High cards bonus
-  for (final c in cardsInSuit) {
-    if (c.rank == Rank.ace) score += 5.0;
-    if (c.rank == Rank.king) score += 3.0;
-    if (c.rank == Rank.queen) score += 2.0;
-    if (c.rank == Rank.jack) score += 1.0;
-  }
-  // Holding the 10 of this suit is a big bonus — it becomes nearly unbeatable as trump
-  if (cardsInSuit.any((c) => c.isTen)) score += 6.0;
-  return score;
-}
-
-double _evaluateTrumpSuitQualityHard(Suit suit, _BotContext ctx) {
-  final cardsInSuit = ctx.allCards.where((c) => c.suit == suit).toList();
-  var score = 0.0;
-
-  // Length and high cards
-  score += cardsInSuit.length * 2.5;
-  for (final c in cardsInSuit) {
-    if (c.rank == Rank.ace) score += 6.0;
-    if (c.rank == Rank.king) score += 4.0;
-    if (c.rank == Rank.queen) score += 2.5;
-    if (c.rank == Rank.jack) score += 1.5;
-  }
-
-  // Holding the 10 of the proposed trump is huge
-  if (cardsInSuit.any((c) => c.isTen)) score += 8.0;
-
-  // Penalize if partner is known void — they cannot help draw trump or ruff
-  if (ctx.partnerKnownVoidIn(suit)) score -= 4.0;
-
-  // Reward if opponents are known void — our side suits are more ruffable
-  score += ctx.opponentsKnownVoidIn(suit).length * 3.0;
-
-  // Penalize unseen cards in the suit (we don't yet control it)
-  score -= ctx.unseenInSuit(suit).length * 0.5;
-
-  // Bonus for side aces that let us regain lead and cash 10s
-  for (final c in ctx.allCards) {
-    if (c.suit == suit) continue;
-    if (c.rank == Rank.ace) score += 1.0;
-  }
-
-  // If current trick contains an opponent's 10 and this suit would win it,
-  // strongly prefer this suit
-  if (ctx.trick != null && ctx.trick!.plays.isNotEmpty) {
-    final leadSuit = ctx.leadSuit ?? ctx.trick!.plays.first.card.suit;
-    if (ctx.trickHasTen && suit != leadSuit) {
-      final wouldWin = ctx.trick!.plays.every((p) =>
-          p.card.suit != suit ||
-          cardsInSuit.isEmpty ||
-          cardsInSuit.first.rank.value > p.card.rank.value);
-      if (wouldWin) score += 20.0;
-    }
-  }
-
-  return score;
-}
-
-/// §8.2: Decide whether to spend a trump card on this trick.
-bool _shouldTrumpIn(
-    List<PlayingCard> trumpCards, _BotContext ctx, BotDifficulty diff) {
-  // Always trump to capture an opponent's ten
-  if (ctx.trickHasTen) return true;
-
-  if (diff == BotDifficulty.easy) return true; // Easy always trumps
-
-  // Hard: conserve trump for ten-bearing tricks in mid/late game
-  if (diff == BotDifficulty.hard && !ctx.trickHasTen) {
-    // ponytail: simple trump conservation — save trump when >6 tricks remain
-    // and no tens at stake. Upgrade to Monte Carlo sim if bots feel too passive.
-    if (ctx.tricksRemaining > 6) return false;
-  }
-
-  return true;
-}
-
-PlayingCard _cheapestTrumpThatWins(List<PlayingCard> trumpCards, _BotContext ctx) {
-  final sortedTrump = List.of(trumpCards)
-    ..sort((a, b) => a.rank.value.compareTo(b.rank.value));
-
-  if (ctx.trick == null || ctx.trick!.plays.isEmpty) return sortedTrump.first;
-
-  final winner = trickWinner(ctx.trick!.plays, ctx.leadSuit!, ctx.trumpSuit);
-  // If current winner is also trump, we need to beat it
-  if (winner.card.suit == ctx.trumpSuit) {
-    final canBeat = sortedTrump
-        .where((c) => c.rank.value > winner.card.rank.value)
-        .toList();
-    if (canBeat.isNotEmpty) return canBeat.first;
-    // Can't beat the existing trump — don't waste ours, sluff instead
-    // (caller handles fallback)
-    return sortedTrump.first;
-  }
-  return sortedTrump.first;
-}
-
-/// §8.3: Discard when not trumping.
-PlayingCard _chooseSluff(List<PlayingCard> cards, _BotContext ctx) {
-  // Never sluff a 10 if avoidable
-  final nonTen = cards.where((c) => !c.isTen).toList();
-  if (nonTen.isNotEmpty) {
-    nonTen.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    return nonTen.first;
-  }
-  // Forced to sluff a 10 — if partner is winning, it's safe
-  cards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-  return cards.first;
+int _compareEvaluations(BotCardEvaluation a, BotCardEvaluation b) {
+  final scoreComparison = b.totalScore.compareTo(a.totalScore);
+  if (scoreComparison != 0) return scoreComparison;
+  final rankComparison = a.card.rank.value.compareTo(b.card.rank.value);
+  if (rankComparison != 0) return rankComparison;
+  return a.card.suit.index.compareTo(b.card.suit.index);
 }
